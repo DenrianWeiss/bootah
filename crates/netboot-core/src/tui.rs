@@ -104,8 +104,8 @@ impl App {
                     .and_then(|v| v.get(&self.fallback))
                     .and_then(Value::as_str)
             })
-            .unwrap_or(key)
-            .to_string()
+            .map(str::to_owned)
+            .unwrap_or_else(|| crate::i18n::message(key,&self.language,&self.fallback))
     }
     fn label(&self) -> String {
         match self.page {
@@ -370,7 +370,7 @@ fn draw(frame: &mut Frame, app: &App, manager: &Manager) {
     let keys = match app.page {
         Page::Devices => "←/→ Pages   ↑/↓ Select   Enter Assign image   a Add   d Delete   q Quit",
         Page::Profiles => {
-            "←/→ Pages   ↑/↓ Select   PgUp/PgDn Defaults   v Details   i Import ISO   d Default images   q Quit"
+            "←/→ Pages   ↑/↓ Select   v Details   t Toggle Secure Boot   i Import ISO   d Default images   q Quit"
         }
         Page::Activity => "←/→ Pages   ↑/↓ Scroll   Home Top   c Clear logs   q Quit",
         Page::Network => "←/→ Pages   e Edit settings   s Start/stop services   q Quit",
@@ -862,7 +862,7 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
 }
 
 async fn handle_key(app: &mut App, key: KeyEvent, manager: &Manager) {
-    if app.job_running && matches!(key.code, KeyCode::Char('r' | 'p' | 'i' | 'e' | 's')) {
+    if app.job_running && matches!(key.code, KeyCode::Char('r' | 'p' | 'i' | 'e' | 's' | 'c' | 't')) {
         return;
     }
     if app
@@ -1003,7 +1003,18 @@ async fn handle_key(app: &mut App, key: KeyEvent, manager: &Manager) {
                 focus: 0,
             });
         }
+        KeyCode::Char('t') if app.page == Page::Profiles && count > 0 => {
+            let p={let s=manager.state.lock().unwrap();s.config.profiles[app.selected.min(count-1)].clone()};
+            let support=match crate::web::secure_boot_details(manager.clone(),p.id.clone()).await {Ok(s)=>s,Err(e)=>{app.notice=app.tr(&e);return;}};
+            if !support.eligible {app.notice=app.tr("Unsupported image");return;}
+            if !support.enabled && support.state!="passed" {app.notice=app.tr(&support.detail);return;}
+            let m=manager.clone();let enabled=!support.enabled;
+            app.job_running=true;
+            app.job=Some(tokio::spawn(async move {crate::web::secure_boot_action(m,p.id,Some(enabled)).await}));
+        }
         KeyCode::Char('v') if app.page == Page::Profiles && count > 0 => {
+            let id={let store=manager.state.lock().unwrap();store.config.profiles[app.selected.min(count-1)].id.clone()};
+            if let Err(e)=crate::web::secure_boot_details(manager.clone(),id).await {app.notice=app.tr(&e);}
             let store = manager.state.lock().unwrap();
             let p = &store.config.profiles[app.selected.min(count - 1)];
             let mut fields = vec![
@@ -1013,6 +1024,11 @@ async fn handle_key(app: &mut App, key: KeyEvent, manager: &Manager) {
                 ("Directory".into(), p.root.display().to_string()),
                 ("Image file".into(), p.media.clone()),
             ];
+            let support=crate::secure_boot::support(p);
+            if support.eligible {
+                fields.push(("Secure Boot support".into(),format!("{} {}",if support.enabled {app.tr("Enabled")} else {app.tr("Disabled")},app.tr(&support.detail))));
+                for c in support.components {fields.push((c.file,format!("{}\n{}\nSHA-256: {}\n{}",c.signer,c.issuer,c.sha256,c.certificate_sha256)));}
+            }
             if let Some(e) = &p.boot_evidence {
                 fields.extend([
                     ("Entry".into(), e.entry.clone()),
@@ -1450,12 +1466,13 @@ async fn handle_dialog(app: &mut App, key: KeyEvent, manager: &Manager) {
             let state = manager.state.clone();
             app.job_running = true;
             app.job = Some(tokio::task::spawn_blocking(move || {
-                let imported = media::import_with_options(
+                let mut imported = media::import_with_options(
                     std::path::Path::new(&path),
                     &library,
                     trust,
                     false,
                 )?;
+                for p in &mut imported.profiles {p.secure_boot=Some(crate::secure_boot::check(p,&Settings::default())?);}
                 let mut s = state.lock().unwrap();
                 let old = s.config.profiles.clone();
                 s.config.profiles.extend(imported.profiles.clone());

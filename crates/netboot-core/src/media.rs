@@ -14,6 +14,8 @@ pub struct ImportRequest {
     pub trust_local_iso: bool,
     #[serde(default)]
     pub linux_compat: bool,
+    #[serde(default)]
+    pub native_uefi: bool,
 }
 #[derive(Serialize)]
 pub struct ImportResult {
@@ -349,7 +351,7 @@ pub fn import_with_options(
             fs::copy(&source, root.join("boot.img")).map_err(err)?;
             let note = "aboot netboot image; SRM BOOTP/TFTP loads it directly".to_string();
             return Ok(ImportResult {
-                profiles: vec![Profile {
+                profiles: vec![Profile { secure_boot: None,
                     system_id: String::new(),
                     system_name: String::new(),
                     id: format!("{id}-0"),
@@ -385,7 +387,7 @@ pub fn import_with_options(
                 "A complete OpenVMS installation requires an InfoServer LAD/LAST media service"
                     .to_string();
             return Ok(ImportResult {
-                profiles: vec![Profile {
+                profiles: vec![Profile { secure_boot: None,
                     system_id: String::new(),
                     system_name: String::new(),
                     id: format!("{id}-0"),
@@ -490,7 +492,7 @@ pub fn import_with_options(
             if header.get(0x60..0x68) == Some(b"aboot-00") {
                 let note = "aboot netboot image; SRM BOOTP/TFTP loads it directly".to_string();
                 return Ok(ImportResult {
-                    profiles: vec![Profile {
+                    profiles: vec![Profile { secure_boot: None,
                         system_id: String::new(),
                         system_name: String::new(),
                         id: format!("{id}-0"),
@@ -763,7 +765,7 @@ pub fn import_with_options(
             if !note.is_empty() && !informational_note {
                 warnings.push(note.clone());
             }
-            profiles.push(Profile {
+            profiles.push(Profile { secure_boot: None,
                 system_id: String::new(),
                 system_name: String::new(),
                 id: pid,

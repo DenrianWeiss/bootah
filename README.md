@@ -67,7 +67,7 @@ PAPR Platform:
 - Linux
 
 *: For linux, we support AOSC/ArchLinux/Centos/Debian/Fedora/KylinOS/SUSE/Ubuntu/UOS on x86/x86_64/AArch64 platform, AOSC/UOS/KylinOS/Debian for LoongArch64 platform. Debian for other platform(s), Limited support for CloneZilla and other dist exists. NixOS is specifically unsupported, since it requires special ramdisk.
-**: Secure Boot is currently NOT supported
+**: Secure Boot is currently only supported for Windows, SUSE, Ubuntu, CentOS/Fedora and Kylin OS, UOS is not supported.
 
 ## Other
 

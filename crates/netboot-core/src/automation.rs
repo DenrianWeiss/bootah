@@ -190,7 +190,7 @@ mod tests {
     use super::*;
     #[test]
     fn preserves_original_boot_arguments() {
-        let profile = Profile {
+        let profile = Profile { secure_boot: None,
             id: "test".into(),
             name: "test".into(),
             system_id: String::new(),

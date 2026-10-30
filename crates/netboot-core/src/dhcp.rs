@@ -306,6 +306,8 @@ pub fn reply(state: &Shared, req: &Request<'_>, boot_port: bool) -> Option<Reply
                 } else {
                     String::new()
                 }
+            } else if req.ipxe && crate::native_uefi::enabled(p) {
+                String::new()
             } else if req.ipxe && settings.boot_transport == "tftp" {
                 format!("tftp://{}/boot.ipxe", settings.server_ip)
             } else if req.ipxe {

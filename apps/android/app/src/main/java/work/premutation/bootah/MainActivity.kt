@@ -44,6 +44,7 @@ class MainActivity : Activity() {
     private val chinese get()=localeTag.startsWith("zh")
     private fun t(zh:String,en:String)=Strings.tr(zh,localeTag).let{if(it==zh&&!chinese)en else it}
     private fun tr(zh:String)=Strings.tr(zh,localeTag)
+    private fun message(text:String)=Strings.message(text,localeTag)
     private val ink get()=android.graphics.Color.parseColor(if(dark)"#F1F3F7" else "#18212E")
     private val muted get()=android.graphics.Color.parseColor(if(dark)"#A7B1BF" else "#657181")
     private val surface get()=android.graphics.Color.parseColor(if(dark)"#202630" else "#FFFFFF")
@@ -135,14 +136,14 @@ class MainActivity : Activity() {
             try {
                 val connection=URL(endpoint+path).openConnection() as HttpURLConnection
                 authorize(connection)
-                connection.requestMethod=method;connection.connectTimeout=5000;connection.readTimeout=if(path=="/api/media/import"||path.endsWith("/compatibility"))1800000 else if(path=="/api/service/start"||path=="/api/network/detect")150000 else if(path=="/api/network/permissions")40000 else 10000
+                connection.requestMethod=method;connection.connectTimeout=5000;connection.readTimeout=if(path=="/api/media/import"||(path.endsWith("/compatibility")||path.contains("/secure-boot")))1800000 else if(path=="/api/service/start"||path=="/api/network/detect")150000 else if(path=="/api/network/permissions")40000 else 10000
                 if(body!=null){connection.doOutput=true;connection.setRequestProperty("Content-Type","application/json");connection.outputStream.use{it.write(body.toString().toByteArray())}}
                 val code=connection.responseCode
                 val ok=code in 200..299 && connection.getHeaderField("X-Bootah-Authentication")=="bearer-v1"
                 val text=if(code in 200..299&&!ok)tr("核心未确认令牌鉴权") else (if(ok)connection.inputStream else connection.errorStream)?.bufferedReader()?.use{it.readText()} ?: ""
                 connection.disconnect()
-                runOnUiThread{if(ok)done(text)else{failed(code);failedBody?.invoke(code,text);if(!quiet)Toast.makeText(this,text.lines().joinToString("\n"){tr(it)},Toast.LENGTH_LONG).show()}}
-            }catch(e:Exception){runOnUiThread{failed(null);state.text=tr("未连接");if(!quiet)Toast.makeText(this,e.message,Toast.LENGTH_LONG).show()}}
+                runOnUiThread{if(ok)done(text)else{failed(code);failedBody?.invoke(code,text);if(!quiet)Toast.makeText(this,text.lines().joinToString("\n"){message(it)},Toast.LENGTH_LONG).show()}}
+            }catch(e:Exception){runOnUiThread{failed(null);state.text=tr("未连接");if(!quiet)Toast.makeText(this,message(e.message.orEmpty()),Toast.LENGTH_LONG).show()}}
             finally{runOnUiThread{finished()}}
         }
     }
@@ -250,10 +251,26 @@ class MainActivity : Activity() {
     private fun imageDetails(p:JSONObject){
         val panel=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(24),dp(8),dp(24),dp(8))}
         fun field(label:String,value:String){if(value.isBlank()||value=="null")return;panel.addView(TextView(this).apply{text=tr(label);setTextColor(muted);textSize=12f;setPadding(0,dp(10),0,0)});panel.addView(EditText(this).apply{setText(value);setTextColor(ink);textSize=14f;isFocusable=false;isCursorVisible=false;setTextIsSelectable(true);maxLines=5})}
+        if(p.optJSONObject("secure_boot")?.optBoolean("eligible")==true)request("/api/profiles/${p.getString("id")}/secure-boot",quiet=true){text->p.put("secure_boot",JSONObject(text))}
+        if(p.optJSONObject("secure_boot")?.optBoolean("eligible")==true)panel.addView(Button(this).apply{text=t("安全启动支持","Secure Boot support");setOnClickListener{secureBootSettings(p.getString("id"))}})
         field("名称",p.optString("name"));field("架构",p.optString("architecture"));field("类型",p.optString("kind"));field("镜像文件",p.optString("media"));field("目录",p.optString("root"))
-        p.optJSONObject("boot_evidence")?.let{e->field("入口",e.optString("entry"));field("启动配置",e.optString("config"));field("内核",e.optString("kernel"));field("Initrd",e.optString("initrd"));field("安装源",tr(when(e.optString("source")){"http-tree"->"HTTP 安装树";"http-iso"->"HTTP 原盘";"nfs-tree"->"只读 NFS 文件树";"nbd"->"只读 NBD 原盘";"external"->"外部安装源";"local-media"->"需要本地介质";else->"未识别安装源"}));e.optJSONArray("diagnostics")?.each{d->if(d.optString("code") !in setOf("BOOT_CONFIG_FAMILY_LAYOUT","UOS_MANUAL_ONLY"))field(if(d.optString("code") in setOf("SOURCE_REQUIRED","SOURCE_UNVERIFIED"))"需要配置安装源" else "需要处理的问题",d.optString("detail"))}}
+        p.optJSONObject("boot_evidence")?.let{e->field("入口",e.optString("entry"));field("启动配置",e.optString("config"));field("内核",e.optString("kernel"));field("Initrd",e.optString("initrd"));field("安装源",tr(when(e.optString("source")){"http-tree"->"HTTP 安装树";"http-iso"->"HTTP 原盘";"nfs-tree"->"只读 NFS 文件树";"nbd"->"只读 NBD 原盘";"external"->"外部安装源";"local-media"->"需要本地介质";else->"未识别安装源"}));e.optJSONArray("diagnostics")?.each{d->if(d.optString("code") !in setOf("BOOT_CONFIG_FAMILY_LAYOUT","UOS_MANUAL_ONLY"))field(if(d.optString("code") in setOf("SOURCE_REQUIRED","SOURCE_UNVERIFIED"))"需要配置安装源" else "需要处理的问题",message(d.optString("detail")))}}
         field("参数",p.optString("arguments"));p.optJSONObject("boot_files")?.let{files->field("启动文件映射",files.keys().asSequence().sorted().joinToString("\n"){"$it=${files.getString(it)}"})}
         AlertDialog.Builder(this).setTitle(tr("镜像详情")).setView(ScrollView(this).apply{addView(panel)}).setPositiveButton(tr("关闭"),null).show()
+    }
+    private fun secureBootSettings(id:String){
+        request("/api/profiles/$id/secure-boot"){text->
+            val support=JSONObject(text)
+            if(!support.optBoolean("eligible"))return@request
+            val panel=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(24),dp(12),dp(24),dp(12))}
+            val toggle=Switch(this).apply{this.text=t("安全启动支持","Secure Boot support");isChecked=support.optBoolean("enabled");isEnabled=isChecked||support.optString("state")=="passed"};panel.addView(toggle)
+            panel.addView(TextView(this).apply{this.text=message(support.optString("detail")).ifBlank{t("尚未检查","Not checked")};setTextIsSelectable(true)})
+            val results=Button(this).apply{this.text=t("查看检查结果","View check results");setOnClickListener{val items=support.optJSONArray("components")?:JSONArray();val content=(0 until items.length()).joinToString("\n\n"){i->val c=items.getJSONObject(i);"${c.optString("file")}\n${c.optString("signer")}\n${c.optString("issuer")}\nSHA-256: ${c.optString("sha256")}\n${c.optString("certificate_sha256")}"};AlertDialog.Builder(this@MainActivity).setTitle(t("查看检查结果","View check results")).setMessage(content.ifBlank{message(support.optString("detail"))}).setPositiveButton(tr("关闭"),null).show()}};panel.addView(results)
+            val dialog=AlertDialog.Builder(this).setTitle(t("启动设置","Boot settings")).setView(ScrollView(this).apply{addView(panel)}).setNegativeButton(tr("关闭"),null).create()
+            toggle.setOnCheckedChangeListener{_,enabled->toggle.isEnabled=false;request("/api/profiles/$id/secure-boot","PUT",JSONObject().put("enabled",enabled),failed={dialog.dismiss();secureBootSettings(id)}){dialog.dismiss();refresh();secureBootSettings(id)}}
+
+            dialog.show()
+        }
     }
     private fun loadAutomationCapabilities(){
         snapshot.optJSONArray("profiles")?.each{p->val id=p.getString("id");val signature=endpoint+p.toString();if(capabilitySignatures[id]!=signature&&!capabilityRequests.contains(id)){
@@ -303,12 +320,12 @@ class MainActivity : Activity() {
                         val warnings=result.optJSONArray("warnings")
                         val notes=(0 until (warnings?.length()?:0)).map{warnings!!.getString(it)}
                         Toast.makeText(this,tr("ISO 导入完成"),Toast.LENGTH_SHORT).show()
-                        if(notes.isNotEmpty())AlertDialog.Builder(this).setTitle(tr("需要处理的问题")).setMessage(notes.map(::tr).joinToString("\n\n")).setPositiveButton(tr("确定"),null).show()
+                        if(notes.isNotEmpty())AlertDialog.Builder(this).setTitle(tr("需要处理的问题")).setMessage(notes.map(::message).joinToString("\n\n")).setPositiveButton(tr("确定"),null).show()
                     }
                 }
             }catch(e:Exception){
                 if(!submitted)directory.deleteRecursively()
-                runOnUiThread{Toast.makeText(this,e.message,Toast.LENGTH_LONG).show()}
+                runOnUiThread{Toast.makeText(this,message(e.message.orEmpty()),Toast.LENGTH_LONG).show()}
             }
         }
 
@@ -365,7 +382,7 @@ class MainActivity : Activity() {
             val result=JSONObject(response)
             val commands=result.optString("commands")
             val notesArray=result.optJSONArray("notes")
-            val notes=(0 until (notesArray?.length()?:0)).mapNotNull{notesArray?.optString(it)}.joinToString("\n")
+            val notes=(0 until (notesArray?.length()?:0)).mapNotNull{notesArray?.optString(it)}.map(::message).joinToString("\n")
             val status=tr(if(commands.isNotBlank())"在固件中执行以下命令" else if(result.optString("firmware") in setOf("pxe","efi"))"从固件菜单选择网络启动，无需输入命令" else if(result.optString("firmware")=="openfirmware")"请使用固件的网络启动入口" else "请先完成启动配置，详见下方说明")
             val panel=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(24),dp(8),dp(24),dp(8))}
             panel.addView(TextView(this).apply{text=status;textSize=13f;setTextColor(muted)})

@@ -153,7 +153,7 @@ public class MainWindow : Window {
         var trusted=trustLocalIso.IsChecked==true;trustLocalIso.IsChecked=false;
         var picked=await StorageProvider.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions{Title=Tr("导入 ISO"),AllowMultiple=false,FileTypeFilter=new[]{new Avalonia.Platform.Storage.FilePickerFileType("ISO"){Patterns=new[]{"*.iso"}}}});
         if(picked.Count==0)return;status.Text=Tr("正在导入…");tools.IsEnabled=false;
-        try{var result=await api.Import(picked[0].Path.LocalPath,trusted);await Refresh();status.Text=Tr("ISO 导入完成");var issues=result.Warnings;if(issues.Length>0){var form=new FormWindow(Tr("需要处理的问题"));foreach(var issue in issues)form.Note(Tr(issue));await form.ShowDialog<bool>(this);}}
+        try{var result=await api.Import(picked[0].Path.LocalPath,trusted);await Refresh();status.Text=Tr("ISO 导入完成");var issues=result.Warnings;if(issues.Length>0){var form=new FormWindow(Tr("需要处理的问题"));foreach(var issue in issues)form.Note(Strings.Message(issue));await form.ShowDialog<bool>(this);}}
         finally{tools.IsEnabled=true;}
     }
 
@@ -161,8 +161,19 @@ public class MainWindow : Window {
     async Task ShowImageDetails(Profile? p){
         if(p is null)return;var form=new FormWindow(Tr("镜像详情"));
         void Field(string label,string value,bool multiline=false){if(!string.IsNullOrWhiteSpace(value))form.Text(Tr(label),value,multiline).IsReadOnly=true;}
+        if(p.SecureBoot is {Eligible:true} support){
+            form.Section(T("启动设置","Boot settings"));
+            var toggle=form.Check(T("安全启动支持","Secure Boot support"),support.Enabled);
+            var detail=new TextBlock{Text=Strings.Message(support.Detail),TextWrapping=Avalonia.Media.TextWrapping.Wrap};form.Add(detail);
+            var results=form.Text(T("查看检查结果","View check results"),"",true);results.IsReadOnly=true;
+            bool updating=false,loading=true;
+            void Render(){updating=true;toggle.IsChecked=support.Enabled;toggle.IsEnabled=!loading&&(support.Enabled||support.State=="passed");detail.Text=loading?T("正在准备或检查…","Preparing or checking…"):Strings.Message(support.Detail);results.Text=string.Join("\n\n",support.Components.Select(c=>$"{c.File}\n{c.Signer}\n{c.Issuer}\nSHA-256: {c.Sha256}\n{c.CertificateSha256}"));updating=false;}
+            async Task Load(){loading=true;Render();try{support=await api.SecureBoot(p.Id);}catch(Exception e){status.Text=Strings.Message(e.Message);}finally{loading=false;Render();}}
+            async Task Change(){var enabled=toggle.IsChecked==true;loading=true;Render();try{await api.Send($"/api/profiles/{p.Id}/secure-boot",new{enabled},HttpMethod.Put);await Refresh();}catch(Exception e){status.Text=Strings.Message(e.Message);}finally{await Load();}}
+            Render();form.Opened+=async(_,_)=>await Load();toggle.IsCheckedChanged+=async(_,_)=>{if(!updating)await Change();};
+        }
         Field("名称",p.Name);Field("架构",p.Architecture);Field("类型",p.Kind);Field("目录",p.Root);Field("镜像文件",p.Media);
-        if(p.BootEvidence is BootEvidence e){Field("入口",e.Entry);Field("启动配置",e.Config);Field("内核",e.Kernel);Field("Initrd",e.Initrd);Field("安装源",SourceLabel(e.Source));foreach(var d in (e.Diagnostics??[]).Where(ActionableDiagnostic))Field(d.Code is "SOURCE_REQUIRED" or "SOURCE_UNVERIFIED"?"需要配置安装源":d.Code=="SOURCE_STAGE2_MISSING"?"缺少第二阶段文件":d.Code=="SOURCE_REPOSITORY_MISSING"?"未找到软件仓库索引":"需要处理的问题",d.Detail);}
+        if(p.BootEvidence is BootEvidence e){Field("入口",e.Entry);Field("启动配置",e.Config);Field("内核",e.Kernel);Field("Initrd",e.Initrd);Field("安装源",SourceLabel(e.Source));foreach(var d in (e.Diagnostics??[]).Where(ActionableDiagnostic))Field(d.Code is "SOURCE_REQUIRED" or "SOURCE_UNVERIFIED"?"需要配置安装源":d.Code=="SOURCE_STAGE2_MISSING"?"缺少第二阶段文件":d.Code=="SOURCE_REPOSITORY_MISSING"?"未找到软件仓库索引":"需要处理的问题",Strings.Message(d.Detail));}
         Field("参数",p.Arguments,true);Field("启动文件映射",string.Join("\n",p.BootFiles.Select(pair=>$"{pair.Key}={pair.Value}")),true);await form.ShowDialog<bool>(this);
     }
     static string SourceLabel(string source)=>source switch{"http-tree"=>Tr("HTTP 安装树"),"http-iso"=>Tr("HTTP 原盘"),"nfs-tree"=>Tr("只读 NFS 文件树"),"nbd"=>Tr("只读 NBD 原盘"),"external"=>Tr("外部安装源"),"local-media"=>Tr("需要本地介质"),_=>Tr("未识别安装源")};
@@ -359,7 +370,7 @@ class CommandWindow:Window {
         }
         if(notes.Length>0){
             var list=new StackPanel{Spacing=6};
-            foreach(var note in notes)list.Children.Add(new TextBlock{Text="• "+note,TextWrapping=Avalonia.Media.TextWrapping.Wrap,Opacity=.75});
+            foreach(var note in notes)list.Children.Add(new TextBlock{Text="• "+Strings.Message(note),TextWrapping=Avalonia.Media.TextWrapping.Wrap,Opacity=.75});
             content.Children.Add(new ScrollViewer{Content=list,MaxHeight=190});
         }
         root.Children.Add(new ScrollViewer{Content=content});

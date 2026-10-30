@@ -138,11 +138,17 @@ impl Session {
         } else {
             let profile = profile.ok_or_else(|| error(2, "No system assigned"))?;
 
-            let ris_name = (profile.kind == "windows-ris").then(|| {
+            let ris_name = matches!(
+                profile.kind.as_str(),
+                "windows-ris" | "windows" | "windows-pe-iso"
+            )
+            .then(|| {
                 let path = parts[0].replace('\\', "/");
                 let path = path.trim_start_matches('/');
                 path.split_once('/')
-                    .filter(|(prefix, _)| prefix.eq_ignore_ascii_case(&profile.id))
+                    .filter(|(prefix, _)| {
+                        profile.kind == "windows-ris" && prefix.eq_ignore_ascii_case(&profile.id)
+                    })
                     .map(|(_, rest)| rest)
                     .unwrap_or(path)
                     .to_string()
@@ -186,7 +192,7 @@ impl Session {
                 let size = bytes.len() as u64;
                 (Box::new(Cursor::new(bytes)), size)
             } else {
-                let file = crate::media_source::open(&profile.root, name)
+                let file = crate::media_source::open(&profile.root, crate::native_uefi::resource_name(&profile, name))
                     .or_else(|err| {
                         if profile.kind != "windows-ris" {
                             return Err(err);

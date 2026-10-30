@@ -843,7 +843,7 @@ pub fn prepare(
             );
         }
         let no_boot_files = boot_files.is_empty();
-        profiles.push(Profile {
+        profiles.push(Profile { secure_boot: None,
             system_id: String::new(),
             system_name: String::new(),
             id: format!("{id}-{index}"),

@@ -777,7 +777,7 @@ pub fn prepare(
     } else {
         note.push_str(" Original boot parameters are retained without a source handoff.");
     }
-    let profile = Profile {
+    let profile = Profile { secure_boot: None,
         system_id: String::new(),
         system_name: String::new(),
         id: profile_id,

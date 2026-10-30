@@ -1,6 +1,6 @@
 [package]
 name = "netboot-core"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [build-dependencies]
@@ -25,6 +25,7 @@ libc = "0.2"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 uuid = { version = "1", features = ["v4"] }
 regex = "1"
+cross-authenticode = "1.0.3"
 
 tower-http = { version = "0.6", features = ["fs"] }
 tower = { version = "0.5", features = ["util"] }

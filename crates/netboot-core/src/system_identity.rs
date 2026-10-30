@@ -138,7 +138,7 @@ mod tests {
     use std::path::Path;
 
     fn profile(kind: &str) -> Profile {
-        Profile {
+        Profile { secure_boot: None,
             id: String::new(),
             name: String::new(),
             system_id: String::new(),

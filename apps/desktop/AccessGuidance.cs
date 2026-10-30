@@ -35,6 +35,6 @@ internal static class AccessGuidance {
             "Permission to bind this network port was denied. Grant network access to the Bootah core on the service host and retry. On Windows, check administrator and security software restrictions; on macOS, ask an administrator to grant the core the required service permissions.",
             "The Bootah core is missing or cannot be executed. Download and reinstall the complete Bootah package for this platform, or correct NETBOOT_CORE and its execute permissions.",
         }) message=message.Replace(key,Strings.Tr(key),StringComparison.Ordinal);
-        return string.Join("\n",message.Split('\n').Select(Strings.Tr));
+        return Strings.Message(string.Join("\n",message.Split('\n').Select(Strings.Tr)));
     }
 }

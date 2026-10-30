@@ -26,7 +26,7 @@ pub fn prepare(source: &Path, root: &Path, id: &str) -> Result<Option<ImportResu
                 boot_files.insert("sparc64".into(), name.clone());
                 boot_files.insert("default".into(), name);
             }
-            return Ok(Some(ImportResult {profiles: vec![Profile { system_id: String::new(), system_name: String::new(),id:id.into(),name:"Solaris 10 SPARC installation".into(),architecture:"sparc64".into(),kind:"solaris".into(),root:root.into(),boot_files,kernel:String::new(),initrd:String::new(),dtb:String::new(),arguments:String::new(),media:source.display().to_string(),status:"prepared".into(),notes:"Original inetboot and UFS installation root indexed without unpacking the medium. sun4u is the default; select the matching sun4us/sun4v loader for those systems.".into(),boot_evidence:None}],warnings:vec!["The default loader is sun4u. Select the matching sun4us or sun4v loader for those systems.".into()]}));
+            return Ok(Some(ImportResult {profiles: vec![Profile { secure_boot: None, system_id: String::new(), system_name: String::new(),id:id.into(),name:"Solaris 10 SPARC installation".into(),architecture:"sparc64".into(),kind:"solaris".into(),root:root.into(),boot_files,kernel:String::new(),initrd:String::new(),dtb:String::new(),arguments:String::new(),media:source.display().to_string(),status:"prepared".into(),notes:"Original inetboot and UFS installation root indexed without unpacking the medium. sun4u is the default; select the matching sun4us/sun4v loader for those systems.".into(),boot_evidence:None}],warnings:vec!["The default loader is sun4u. Select the matching sun4us or sun4v loader for those systems.".into()]}));
         }
     }
     let image = Image::open(source)?;
@@ -46,7 +46,7 @@ pub fn prepare(source: &Path, root: &Path, id: &str) -> Result<Option<ImportResu
     image.materialize(&kernel, &root.join("solaris-multiboot"))?;
     image.materialize(&initrd, &root.join("solaris-miniroot"))?;
     Ok(Some(ImportResult {
-        profiles: vec![Profile { system_id: String::new(), system_name: String::new(),
+        profiles: vec![Profile { secure_boot: None, system_id: String::new(), system_name: String::new(),
             id: id.into(), name: "Solaris 10 x86 installation miniroot".into(),
             architecture: "x86-bios".into(), kind: "solaris".into(), root: root.into(),
             boot_files: BTreeMap::new(), kernel: "solaris-multiboot".into(),

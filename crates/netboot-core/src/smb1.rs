@@ -760,7 +760,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("bootah-smb-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join("i386")).unwrap();
         std::fs::write(root.join("i386/test.bin"), b"RIS source").unwrap();
-        let profile = crate::model::Profile {
+        let profile = crate::model::Profile { secure_boot: None,
             id: "xp".into(),
             name: "XP".into(),
             system_id: String::new(),

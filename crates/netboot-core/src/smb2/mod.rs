@@ -347,6 +347,7 @@ struct Session {
     key: Option<[u8; 16]>,
     sid: u64,
     trees: BTreeMap<u32, Arc<Tree>>,
+    ipc_trees: BTreeSet<u32>,
     handles: BTreeMap<u64, Handle>,
     next_tree: u32,
     next_handle: u64,
@@ -356,6 +357,7 @@ struct Session {
     last_file: Option<u64>,
     start_time: u64,
     closed: bool,
+    logout_pending: bool,
     client_negotiate: Vec<u8>,
     peer: String,
 }
@@ -372,6 +374,7 @@ impl Session {
             key: None,
             sid: u64::from_le_bytes(random[..8].try_into().unwrap()).max(1),
             trees: BTreeMap::new(),
+            ipc_trees: BTreeSet::new(),
             handles: BTreeMap::new(),
             next_tree: 1,
             next_handle: 1,
@@ -381,6 +384,7 @@ impl Session {
             last_file: None,
             start_time: stamp(),
             closed: false,
+            logout_pending: false,
             client_negotiate: Vec::new(),
             peer: String::new(),
         }
@@ -619,6 +623,14 @@ impl Session {
             }
             out.extend(response);
         }
+        if self.logout_pending {
+            self.key = None;
+            self.identity = None;
+            self.challenge = None;
+            self.last_file = None;
+            self.sid = u64::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().unwrap()).max(1);
+            self.logout_pending = false;
+        }
         Ok(out)
     }
     fn command(&mut self, req: &[u8], cmd: u16, tid: &mut u32, related: bool) -> Result<Vec<u8>> {
@@ -692,12 +704,13 @@ impl Session {
                     return Err(INVALID);
                 }
                 self.trees.clear();
+                self.ipc_trees.clear();
                 self.handles.clear();
-                self.closed = true;
+                self.logout_pending = true;
                 Ok(vec![4, 0, 0, 0])
             }
             3 => {
-                if size != 9 || self.trees.len() >= 8 {
+                if size != 9 || self.trees.len() + self.ipc_trees.len() >= 8 {
                     return Err(INVALID);
                 }
                 let share = utf16(range(
@@ -711,9 +724,19 @@ impl Session {
                     || !pieces[0].is_empty()
                     || !pieces[1].is_empty()
                     || pieces[2].is_empty()
-                    || !pieces[3].eq_ignore_ascii_case("Bootah")
+                    || !(pieces[3].eq_ignore_ascii_case("Bootah") || pieces[3].eq_ignore_ascii_case("IPC$"))
                 {
                     return Err(0xc00000cc);
+                }
+                if pieces[3].eq_ignore_ascii_case("IPC$") {
+                    *tid = self.next_tree;
+                    self.next_tree += 1;
+                    self.ipc_trees.insert(*tid);
+                    let mut out = vec![0; 16];
+                    set16(&mut out, 0, 16);
+                    out[2] = 2;
+                    set32(&mut out, 12, 0x001f01ff);
+                    return Ok(out);
                 }
                 let tree = if let Some(tree) = self.trees.values().next() {
                     tree.clone()
@@ -733,7 +756,7 @@ impl Session {
                 Ok(out)
             }
             4 => {
-                if size != 4 || self.trees.remove(tid).is_none() {
+                if size != 4 || (self.trees.remove(tid).is_none() && !self.ipc_trees.remove(tid)) {
                     return Err(INVALID);
                 }
                 self.handles.retain(|_, h| h.tree != *tid);
@@ -825,6 +848,9 @@ impl Session {
         set32(out, at + 48, node.attrs());
     }
     fn create(&mut self, req: &[u8], tid: u32) -> Result<Vec<u8>> {
+        if self.ipc_trees.contains(&tid) {
+            return Err(NOT_FOUND);
+        }
         if get16(req, 64)? != 57 || self.handles.len() >= MAX_HANDLES {
             return Err(INVALID);
         }
@@ -872,7 +898,7 @@ impl Session {
         Ok(out)
     }
     fn ioctl(&self, req: &[u8], tid: u32) -> Result<Vec<u8>> {
-        if get16(req, 64)? != 57 || !self.trees.contains_key(&tid) {
+        if get16(req, 64)? != 57 || !(self.trees.contains_key(&tid) || self.ipc_trees.contains(&tid)) {
             return Err(INVALID);
         }
         let code = get32(req, 68)?;
@@ -882,6 +908,9 @@ impl Session {
             } else {
                 UNSUPPORTED
             });
+        }
+        if self.ipc_trees.contains(&tid) {
+            return Err(UNSUPPORTED);
         }
         let input = range(req, get32(req, 88)? as usize, get32(req, 92)? as usize, 120)?;
         if input.len() < 24 {
@@ -1192,7 +1221,7 @@ fn security_descriptor(flags: u32) -> Result<Vec<u8>> {
 }
 async fn serve(mut stream: TcpStream, mut session: Session) -> std::result::Result<(), String> {
     stream.set_nodelay(true).map_err(|e| e.to_string())?;
-    let authentication_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut authentication_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let peer = stream
         .peer_addr()
         .map(|p| p.to_string())
@@ -1221,6 +1250,7 @@ async fn serve(mut stream: TcpStream, mut session: Session) -> std::result::Resu
         if session.key.is_none() && tokio::time::Instant::now() > authentication_deadline {
             return Err("SMB2 authentication deadline".into());
         }
+        let authenticated = session.key.is_some();
         let (next, result) = tokio::task::spawn_blocking(move || {
             let result = session.process(&data);
             (session, result)
@@ -1228,6 +1258,9 @@ async fn serve(mut stream: TcpStream, mut session: Session) -> std::result::Resu
         .await
         .map_err(|e| e.to_string())?;
         session = next;
+        if authenticated && session.key.is_none() {
+            authentication_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        }
         let response = result.map_err(|e| {
             session.audit(&format!("peer={peer} protocol error {e:08x}"));
             format!("SMB2 protocol error {e:08x}")
@@ -1326,6 +1359,28 @@ mod tests {
         assert_eq!(&negotiate(&mut legacy,b"\x02NT LM 0.12\0").await[..4],b"\xffSMB");
         for task in tasks { task.abort(); let _ = task.await; }
     }
+    #[test]
+    fn ipc_share_supports_dfs_probe_without_exposing_media() {
+        let root = std::env::temp_dir().join(format!("bootah-ipc-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut session = Session::new(fixture(&root), Arc::new(RwLock::new(vec![])), [0;16]);
+        let name = wide("\\\\server\\IPC$");
+        let mut request = vec![0;72];
+        set16(&mut request,64,9); set16(&mut request,68,72); set16(&mut request,70,name.len() as u16);
+        request.extend(name);
+        let mut tid=0;
+        let reply=session.command(&request,3,&mut tid,false).unwrap();
+        assert_eq!(reply[2],2);
+        assert!(!session.trees.contains_key(&tid));
+        let mut ioctl=vec![0;120];set16(&mut ioctl,64,57);set32(&mut ioctl,68,0x00060194);
+        assert_eq!(session.ioctl(&ioctl,tid).unwrap_err(),0xc000019c);
+        assert_eq!(session.create(&vec![0;120],tid).unwrap_err(),NOT_FOUND);
+        let mut disconnect=vec![0;68];set16(&mut disconnect,64,4);
+        session.command(&disconnect,4,&mut tid,false).unwrap();
+        assert!(session.ipc_trees.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn rejects_unsafe_names_and_write_access() {
         for name in [

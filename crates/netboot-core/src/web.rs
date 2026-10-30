@@ -328,6 +328,18 @@ impl Manager {
         Ok(credential)
     }
     async fn prepare_media(&self, config: &Config) -> Result<(), String> {
+        let native_config = config.clone();
+        tokio::task::spawn_blocking(move || {
+            for profile in &native_config.profiles {
+                if crate::native_uefi::enabled(profile) { crate::secure_boot::validate_current(profile)?; }
+                if crate::native_uefi::enabled(profile) && profile.kind == "windows" {
+                    crate::native_uefi::prepare_windows_wim(profile, &native_config.settings)?;
+                }
+            }
+            Ok::<_, String>(())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
         let mut services = self.media_services.lock().await;
         let lengths = (services.nfs.len(), services.exports.len(), services.nbd.len(), services.bootparams.len());
         let previous_backends = services.backends.lock().unwrap().clone();
@@ -367,7 +379,7 @@ impl Manager {
         if result.is_ok() && lengths != (services.nfs.len(), services.exports.len(), services.nbd.len(), services.bootparams.len()) {
             self.state.lock().unwrap().event("server", "service", "Prepared required media services and exports");
         }
-        result.map_err(|error| format!("Cannot prepare boot services; selection unchanged. 无法准备启动服务，镜像选择未更改：{error}"))
+        result.map_err(|error| format!("Cannot prepare boot services; selection unchanged: {error}"))
     }
     pub fn is_running(&self) -> bool {
         !self.tasks.lock().unwrap().is_empty()
@@ -553,6 +565,8 @@ pub fn router(manager: Manager, token: String) -> Router {
         )
         .route("/api/profiles/{id}", delete(remove_profile))
         .route("/api/profiles/{id}/compatibility", put(profile_compatibility))
+        .route("/api/profiles/{id}/secure-boot", get(secure_boot_status).put(secure_boot_switch))
+        .route("/api/profiles/{id}/secure-boot/check", post(secure_boot_check))
         .route("/api/profiles/{id}/boot-commands", get(boot_commands))
         .route("/api/profiles/{id}/uboot", get(uboot))
         .route("/api/service/start", post(start))
@@ -622,7 +636,7 @@ async fn clear_events(State(m): State<Manager>) -> Result<StatusCode, ApiError> 
 async fn snapshot(State(m): State<Manager>) -> Json<serde_json::Value> {
     let s = m.state.lock().unwrap();
     let mut value =
-        serde_json::json!({"network":*m.network.lock().unwrap(),"settings":s.config.settings,"devices":s.config.devices,"device_conflicts":s.config.pending_device_conflicts,"profiles":s.config.profiles,"default_profiles":s.config.default_profiles,"automations":s.config.automations.iter().map(|(key,value)| (key.clone(),serde_json::json!({"method":value.method,"filename":value.filename,"profile_id":value.profile_id}))).collect::<std::collections::BTreeMap<_,_>>(),"events":s.events,"running":!m.tasks.lock().unwrap().is_empty(),"protocols":[{"name":"BOOTP/DHCPv4","implemented":true},{"name":"PXE / ProxyDHCP (unicast)","implemented":true},{"name":"TFTP","implemented":true},{"name":"HTTP","implemented":true},{"name":"NBD (read-only)","implemented":true},{"name":"RARP","implemented":true},{"name":"RMP","implemented":true},{"name":"MOP","implemented":true},{"name":"LAD/LAST","implemented":false},{"name":"ND","implemented":false},{"name":"DHCPv6","implemented":false}]});
+        serde_json::json!({"network":*m.network.lock().unwrap(),"settings":s.config.settings,"devices":s.config.devices,"device_conflicts":s.config.pending_device_conflicts,"profiles":s.config.profiles.iter().map(|p| {let mut p=p.clone();p.secure_boot=Some(crate::secure_boot::support(&p));p}).collect::<Vec<_>>(),"default_profiles":s.config.default_profiles,"automations":s.config.automations.iter().map(|(key,value)| (key.clone(),serde_json::json!({"method":value.method,"filename":value.filename,"profile_id":value.profile_id}))).collect::<std::collections::BTreeMap<_,_>>(),"events":s.events,"running":!m.tasks.lock().unwrap().is_empty(),"protocols":[{"name":"BOOTP/DHCPv4","implemented":true},{"name":"PXE / ProxyDHCP (unicast)","implemented":true},{"name":"TFTP","implemented":true},{"name":"HTTP","implemented":true},{"name":"NBD (read-only)","implemented":true},{"name":"RARP","implemented":true},{"name":"RMP","implemented":true},{"name":"MOP","implemented":true},{"name":"LAD/LAST","implemented":false},{"name":"ND","implemented":false},{"name":"DHCPv6","implemented":false}]});
     value["core_version"] = serde_json::json!({"display": env!("BOOTAH_CORE_VERSION"), "build": env!("BOOTAH_CORE_BUILD").parse::<u32>().unwrap()});
     Json(value)
 }
@@ -888,6 +902,14 @@ async fn profile(
         return Err(bad("Unknown system kind"));
     }
     let _guard = m.lifecycle.lock().await;
+    {
+        let state=m.state.lock().unwrap();
+        if let Some(old)=state.config.profiles.iter().find(|o|o.id==p.id) {
+            if crate::native_uefi::enabled(old) {return Err(bad("Turn off Secure Boot support before editing"));}
+        }
+    }
+    if crate::native_uefi::enabled(&p) {return Err(bad("Use the Secure Boot support setting"));}
+    p.secure_boot=Some(crate::secure_boot::Support {eligible:crate::secure_boot::eligible(&p),state:"unchecked".into(),..Default::default()});
     if m.is_running() {
         let mut candidate = m.state.lock().unwrap().config.clone();
         if candidate.default_profiles.iter().any(|(architecture, id)| id == &p.id && !p.boot_files.contains_key(architecture)) {
@@ -1114,6 +1136,11 @@ async fn boot_file(
                 &credential.password,
             ) {
                 Ok(script) => {
+                    let script = if crate::native_uefi::enabled(&p) {
+                        if let Some(auto) = auto.as_ref().filter(|a| a.method == "unattend") {
+                            format!("@echo off\r\n\"%SystemRoot%\\System32\\bootah-native.exe\" \"{}unattend.xml\" \"%~dp0unattend.xml\"\r\nif errorlevel 1 exit /b 1\r\n{script}", automation::url(&settings, auto))
+                        } else { script }
+                    } else { script };
                     return (
                         [
                             (header::CONTENT_TYPE, "text/plain"),
@@ -1136,6 +1163,7 @@ async fn boot_file(
         );
         return ([(header::CONTENT_TYPE, "text/plain")], bytes).into_response();
     }
+    let file = crate::native_uefi::resource_name(&p, &file).to_string();
     if let Ok(path) = safe_file(&p.root, &file) {
         use tower::ServiceExt;
         let mut request = axum::http::Request::builder()
@@ -1241,6 +1269,7 @@ async fn profile_compatibility(
     let (old, library) = {
         let s = m.state.lock().unwrap();
         let old = s.config.profiles.iter().find(|p| p.id == id).cloned().ok_or_else(|| bad("Unknown system"))?;
+        if crate::native_uefi::enabled(&old) {return Err(bad("Turn off Secure Boot support before changing compatibility mode"));}
         if old.kind != "linux" || old.media.is_empty() {
             return Err(bad("Compatibility mode requires an imported Linux ISO."));
         }
@@ -1273,6 +1302,7 @@ async fn import_media(
     State(m): State<Manager>,
     Json(request): Json<media::ImportRequest>,
 ) -> Result<Json<media::ImportResult>, ApiError> {
+    if request.native_uefi { return Err(bad("Use the image Secure Boot support setting after import")); }
     let library = {
         let s = m.state.lock().unwrap();
         s.path
@@ -1281,12 +1311,14 @@ async fn import_media(
             .join("media")
     };
     let mut result = tokio::task::spawn_blocking(move || {
-        media::import_with_options(
+        let mut result = media::import_with_options(
             &request.path,
             &library,
             request.trust_local_iso,
             request.linux_compat,
-        )
+        )?;
+        for profile in &mut result.profiles {profile.secure_boot=Some(crate::secure_boot::check(profile,&Settings::default())?);}
+        Ok::<_, String>(result)
     })
     .await
     .map_err(|e| bad(e.to_string()))?
@@ -1594,4 +1626,43 @@ mod smb_lifecycle_tests {
         assert!(tokio::net::TcpListener::bind(address).await.is_ok());
         std::fs::remove_dir_all(root).unwrap();
     }
+}
+
+async fn secure_boot_status(State(m):State<Manager>,Path(id):Path<String>) -> Result<impl IntoResponse,ApiError> {
+    Ok(([(header::CACHE_CONTROL,"no-store")],Json(refresh_secure_boot(m,id,false).await?)))
+}
+async fn secure_boot_check(State(m):State<Manager>,Path(id):Path<String>) -> Result<Json<crate::secure_boot::Support>,ApiError> {
+    refresh_secure_boot(m,id,true).await.map(Json)
+}
+async fn refresh_secure_boot(m:Manager,id:String,force:bool) -> Result<crate::secure_boot::Support,ApiError> {
+    let _guard=m.lifecycle.lock().await;
+    let (old,settings)={let s=m.state.lock().unwrap();(s.config.profiles.iter().find(|p|p.id==id).cloned().ok_or_else(||bad("Unknown system"))?,s.config.settings.clone())};
+    let mut result=tokio::task::spawn_blocking(move || {
+        if !force {if let Some(cached)=crate::secure_boot::cached(&old) {return Ok((cached,false));}}
+        crate::secure_boot::check(&old,&settings).map(|s|(s,true))
+    }).await.map_err(|e|bad(e.to_string()))?.map_err(bad)?;
+    if !result.1 {return Ok(result.0);}
+    let mut s=m.state.lock().unwrap();let previous=s.config.profiles.clone();
+    let p=s.config.profiles.iter_mut().find(|p|p.id==id).ok_or_else(||bad("Unknown system"))?;
+    result.0.enabled=crate::native_uefi::enabled(p);
+    p.secure_boot=Some(result.0.clone());
+    if let Err(e)=s.save(){s.config.profiles=previous;return Err(bad(e));}Ok(result.0)
+}
+async fn secure_boot_switch(State(m):State<Manager>,Path(id):Path<String>,Json(request):Json<CompatibilityRequest>) -> Result<Json<Profile>,ApiError> {
+    let _guard=m.lifecycle.lock().await;
+    let (old,settings)={let s=m.state.lock().unwrap();(s.config.profiles.iter().find(|p|p.id==id).cloned().ok_or_else(||bad("Unknown system"))?,s.config.settings.clone())};
+    let changed=tokio::task::spawn_blocking(move ||crate::secure_boot::switch(&old,&settings,request.enabled)).await.map_err(|e|bad(e.to_string()))?.map_err(bad)?;
+    let mut s=m.state.lock().unwrap();
+    if s.config.default_profiles.iter().any(|(arch,p)|p==&id && !changed.boot_files.contains_key(arch)) {return Err(bad("Remove incompatible architecture defaults before switching"));}
+    let previous=s.config.profiles.clone();let p=s.config.profiles.iter_mut().find(|p|p.id==id).ok_or_else(||bad("Unknown system"))?;*p=changed.clone();
+    if let Err(e)=s.save(){s.config.profiles=previous;return Err(bad(e));}Ok(Json(changed))
+}
+
+pub async fn secure_boot_action(m:Manager,id:String,enabled:Option<bool>) -> Result<String,String> {
+    if let Some(enabled)=enabled {secure_boot_switch(State(m),Path(id),Json(CompatibilityRequest{enabled})).await.map(|_|"Secure Boot support updated".into()).map_err(|(_,e)|e)}
+    else {secure_boot_check(State(m),Path(id)).await.map(|Json(s)|s.detail).map_err(|(_,e)|e)}
+}
+
+pub async fn secure_boot_details(m:Manager,id:String) -> Result<crate::secure_boot::Support,String> {
+    refresh_secure_boot(m,id,false).await.map_err(|(_,error)|error)
 }

@@ -39,6 +39,7 @@ struct SystemImage: Codable, Identifiable, Hashable {
     var status: String?
     var notes: String?
     var bootEvidence: BootEvidence?
+    var secureBoot: SecureBootSupport?
     var displayName: String { systemName?.isEmpty == false ? systemName! : name }
     var logoId: String {
         switch systemId ?? "" {
@@ -50,6 +51,20 @@ struct SystemImage: Codable, Identifiable, Hashable {
         default: ["ubuntu","debian","fedora","archlinux","linuxmint","nixos","alpinelinux","opensuse","centos","redhat","rockylinux","almalinux","linux","aosc","freebsd","netbsd","openbsd","solaris"].contains(systemId ?? "") ? systemId! : ""
         }
     }
+}
+struct SecureBootSupport:Codable,Hashable {
+    var eligible:Bool
+    var enabled:Bool
+    var state:String
+    var detail:String
+    var components:[SecureBootComponent]
+}
+struct SecureBootComponent:Codable,Hashable {
+    var file:String
+    var sha256:String
+    var signer:String
+    var issuer:String
+    var certificateSha256:String
 }
 struct SystemLogo: View {
     @Environment(\.colorScheme) private var colorScheme
@@ -173,6 +188,7 @@ enum L10n {
     static var zh: Bool { Locale.preferredLanguages.first?.lowercased().hasPrefix("zh") ?? false }
     static func t(_ chinese: String, _ english: String) -> String { let value=Strings.tr(chinese); return !zh && value == chinese ? english : value }
     static func tr(_ chinese: String) -> String { Strings.tr(chinese) }
+    static func message(_ text:String)->String {Strings.message(text)}
 }
 enum AccessGuidance {
     static func downloadURL(_ message:String) -> URL? {
@@ -206,7 +222,7 @@ enum AccessGuidance {
             "Permission to bind this network port was denied. Grant network access to the Bootah core on the service host and retry. On Windows, check administrator and security software restrictions; on macOS, ask an administrator to grant the core the required service permissions.",
             "The Bootah core is missing or cannot be executed. Download and reinstall the complete Bootah package for this platform, or correct NETBOOT_CORE and its execute permissions.",
         ] {result=result.replacingOccurrences(of:key,with:L10n.tr(key))}
-        return result.components(separatedBy:"\n").map{L10n.tr($0)}.joined(separator:"\n")
+        return L10n.message(result.components(separatedBy:"\n").map{L10n.tr($0)}.joined(separator:"\n"))
     }
 }
 struct NetworkPermissions:Codable {var helperAvailable:Bool;var reason:String;var captureReady:Bool? = nil;var platform:String = "macos";var issues:[String] = []}
@@ -361,7 +377,7 @@ struct NetworkPermissions:Codable {var helperAvailable:Bool;var reason:String;va
             var request = URLRequest(url: endpoint.appendingPathComponent(path))
             request.httpMethod = method
             if path=="api/service/start" || path=="api/network/detect" {request.timeoutInterval=150}
-            if path.hasSuffix("/compatibility") {request.timeoutInterval=1800}
+            if path.hasSuffix("/compatibility") || path.contains("/secure-boot") {request.timeoutInterval=1800}
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             let encoder = JSONEncoder(); encoder.keyEncodingStrategy = .convertToSnakeCase
             request.httpBody = try encoder.encode(value)
@@ -408,13 +424,21 @@ struct NetworkPermissions:Codable {var helperAvailable:Bool;var reason:String;va
         } catch {self.error=error.localizedDescription}
     }
     func importISO(_ url: URL, trustLocalISO: Bool = false) async -> (ids:[String],summary:String) {
-        do {var request=URLRequest(url:endpoint.appendingPathComponent("api/media/import"));request.httpMethod="POST";request.timeoutInterval=1800;request.setValue("application/json",forHTTPHeaderField:"Content-Type");request.httpBody=try JSONSerialization.data(withJSONObject:["path":url.path,"trust_local_iso":trustLocalISO]);let (bytes,response)=try await fetch(request:request);guard let http=response as? HTTPURLResponse,(200..<300).contains(http.statusCode) else {self.error=String(decoding:bytes,as:UTF8.self);return ([],"")};let result=try JSONSerialization.jsonObject(with:bytes) as? [String:Any];let profiles=result?["profiles"] as? [[String:Any]] ?? [];let warnings=(result?["warnings"] as? [String] ?? []);let summary=warnings.map(L10n.tr).joined(separator:"\n\n");await refresh();return (profiles.compactMap{$0["id"] as? String},summary)}catch{self.error=error.localizedDescription;return ([],"")}
+        do {var request=URLRequest(url:endpoint.appendingPathComponent("api/media/import"));request.httpMethod="POST";request.timeoutInterval=1800;request.setValue("application/json",forHTTPHeaderField:"Content-Type");request.httpBody=try JSONSerialization.data(withJSONObject:["path":url.path,"trust_local_iso":trustLocalISO]);let (bytes,response)=try await fetch(request:request);guard let http=response as? HTTPURLResponse,(200..<300).contains(http.statusCode) else {self.error=String(decoding:bytes,as:UTF8.self);return ([],"")};let result=try JSONSerialization.jsonObject(with:bytes) as? [String:Any];let profiles=result?["profiles"] as? [[String:Any]] ?? [];let warnings=(result?["warnings"] as? [String] ?? []);let summary=warnings.map(L10n.message).joined(separator:"\n\n");await refresh();return (profiles.compactMap{$0["id"] as? String},summary)}catch{self.error=error.localizedDescription;return ([],"")}
     }
     func automationMethods(_ id:String) async -> [String] {do {let (data,_) = try await fetch(url:endpoint.appendingPathComponent("api/profiles/\(id)/automation-methods"));return try JSONDecoder().decode([String].self,from:data)}catch{self.error=error.localizedDescription;return []}}
     func saveAutomation(scope:String,id:String,method:String,file:URL) async {do {var parts=URLComponents(url:endpoint.appendingPathComponent("api/automation/\(scope)/\(id)"),resolvingAgainstBaseURL:false)!;parts.queryItems=[URLQueryItem(name:"method",value:method),URLQueryItem(name:"filename",value:file.lastPathComponent)];var request=URLRequest(url:parts.url!);request.httpMethod="PUT";request.httpBody=try Data(contentsOf:file);let (data,response)=try await fetch(request:request);guard (response as? HTTPURLResponse)?.statusCode == 204 else{self.error=String(decoding:data,as:UTF8.self);return};await refresh()}catch{self.error=error.localizedDescription}}
     func clearAutomation(scope:String,id:String) async {var request=URLRequest(url:endpoint.appendingPathComponent("api/automation/\(scope)/\(id)"));request.httpMethod="DELETE";do{let (_,response)=try await fetch(request:request);if (response as? HTTPURLResponse)?.statusCode == 204 {await refresh()}}catch{self.error=error.localizedDescription}}
     func commands(_ id: String) async {
         do { let (bytes, _) = try await fetch(url:endpoint.appendingPathComponent("api/profiles/\(id)/uboot")); uboot=String(decoding:bytes,as:UTF8.self) } catch { self.error=error.localizedDescription }
+    }
+    func secureBootSupport(_ id:String) async -> SecureBootSupport? {
+        do {
+            let (data,response)=try await fetch(url:endpoint.appendingPathComponent("api/profiles/\(id)/secure-boot"))
+            guard let http=response as? HTTPURLResponse,(200..<300).contains(http.statusCode) else {self.error=String(decoding:data,as:UTF8.self);return nil}
+            let decoder=JSONDecoder();decoder.keyDecodingStrategy = .convertFromSnakeCase
+            return try decoder.decode(SecureBootSupport.self,from:data)
+        } catch {self.error=error.localizedDescription;return nil}
     }
     func manualCommands(_ id: String) async {
         do {
@@ -631,7 +655,7 @@ struct MainView: View {
         .sheet(item:$machine) {d in MachineEditor(server:server,machine:d)}
         .sheet(isPresented:$importOptions){if let url=importURL {ImportOptionsView(url:url){trusted in startImport(url:url,trusted:trusted)}}}
         .sheet(isPresented:$server.showNetworkPermissions){NetworkPermissionsView(server:server)}
-        .sheet(item:$imageDetails){p in ImageDetailsView(image:p)}
+        .sheet(item:$imageDetails){p in ImageDetailsView(image:p,server:server)}
         .sheet(item:$image) {p in ImageEditor(server:server,image:p)}
         .sheet(isPresented:$network) {if let settings=server.snapshot?.settings {NetworkEditor(server:server,settings:settings)}}
         .sheet(isPresented:$about) {AboutView(server:server)}
@@ -665,15 +689,41 @@ struct ImageTechnicalFields:View {
         field("名称",image.name);field("架构",image.architecture);field("类型",image.kind);field("镜像文件",image.media ?? "");field("目录",image.root)
         if let evidence=image.bootEvidence {
             field("入口",evidence.entry);field("启动配置",evidence.config);field("内核",evidence.kernel);field("Initrd",evidence.initrd);field("安装源",evidence.sourceLabel)
-            ForEach((evidence.diagnostics ?? []).filter{!["BOOT_CONFIG_FAMILY_LAYOUT","UOS_MANUAL_ONLY"].contains($0.code)},id:\.code){diagnostic in field(diagnostic.label,diagnostic.detail)}
+            ForEach((evidence.diagnostics ?? []).filter{!["BOOT_CONFIG_FAMILY_LAYOUT","UOS_MANUAL_ONLY"].contains($0.code)},id:\.code){diagnostic in field(diagnostic.label,L10n.message(diagnostic.detail))}
         }
         field("参数",image.arguments);field("启动文件映射",image.bootFiles.keys.sorted().map{"\($0)=\(image.bootFiles[$0]!)"}.joined(separator:"\n"))
     }
 }
 struct ImageDetailsView:View {
     let image:SystemImage
+    var server:Server
     @Environment(\.dismiss) private var dismiss
-    var body:some View {VStack(alignment:.leading){Text(L10n.tr("镜像详情")).font(.title2);Form{ImageTechnicalFields(image:image)}.formStyle(.grouped);HStack{Spacer();Button(L10n.tr("完成")){dismiss()}.keyboardShortcut(.defaultAction)}}.padding(24).frame(width:650,height:560)}
+    var body:some View {VStack(alignment:.leading){Text(L10n.tr("镜像详情")).font(.title2);Form{SecureBootSettings(image:image,server:server);ImageTechnicalFields(image:image)}.formStyle(.grouped);HStack{Spacer();Button(L10n.tr("完成")){dismiss()}.keyboardShortcut(.defaultAction)}}.padding(24).frame(width:650,height:560)}
+}
+struct SecureBootSettings:View {
+    let image:SystemImage
+    var server:Server
+    @State private var busy=true
+    @State private var detected:SecureBootSupport?
+    private var support:SecureBootSupport? {detected ?? server.snapshot?.profiles.first(where:{$0.id==image.id})?.secureBoot ?? image.secureBoot}
+    private func update() async {busy=true;detected=await server.secureBootSupport(image.id);busy=false}
+    var body:some View {
+        Group {
+            if let support,support.eligible {
+                Section(L10n.t("启动设置","Boot settings")) {
+                    Toggle(L10n.t("安全启动支持","Secure Boot support"),isOn:Binding(get:{support.enabled},set:{enabled in
+                        busy=true
+                        Task {_ = await server.send("api/profiles/\(image.id)/secure-boot",["enabled":enabled],method:"PUT");await update()}
+                    })).disabled(busy || (!support.enabled && support.state != "passed"))
+                    if busy {ProgressView(L10n.t("正在准备或检查…","Preparing or checking…"))}
+                    if !busy {Text(support.detail.isEmpty ? L10n.t("尚未检查","Not checked") : L10n.message(support.detail)).font(.caption).textSelection(.enabled)}
+                    DisclosureGroup(L10n.t("查看检查结果","View check results")) {
+                        ForEach(support.components,id:\.file){c in VStack(alignment:.leading,spacing:4){Text(c.file).font(.headline);Text(c.signer);Text(c.issuer);Text("SHA-256: \(c.sha256)");Text(L10n.t("证书指纹","Certificate fingerprint")+": "+c.certificateSha256)}.font(.caption).textSelection(.enabled)}
+                    }
+                }
+            }
+        }.task {await update()}
+    }
 }
 struct AboutView:View {
     var server:Server
@@ -728,7 +778,7 @@ struct BootCommandsView:View {
             if !manual.notes.isEmpty {
                 ScrollView {
                     VStack(alignment:.leading,spacing:6) {
-                        ForEach(manual.notes,id:\.self) {note in Text("• "+note).font(.callout).foregroundStyle(.secondary).frame(maxWidth:.infinity,alignment:.leading)}
+                        ForEach(manual.notes,id:\.self) {note in Text("• "+L10n.message(note)).font(.callout).foregroundStyle(.secondary).frame(maxWidth:.infinity,alignment:.leading)}
                     }
                 }.frame(maxHeight:180)
             }

@@ -72,7 +72,7 @@ fn pxe_auto(profile: &Profile, chinese: bool) -> ManualBoot {
         .next()
         .cloned()
         .unwrap_or_default();
-    let verified = matches!(profile.architecture.as_str(), "x64" | "arm64");
+    let verified = !crate::native_uefi::enabled(profile) && matches!(profile.architecture.as_str(), "x64" | "arm64");
     manual(
         "pxe",
         "UEFI/BIOS PXE",
@@ -583,6 +583,32 @@ pub fn virtual_file(
     settings: &Settings,
     auto: Option<&AutoConfig>,
 ) -> Option<Vec<u8>> {
+    if crate::native_uefi::enabled(profile)
+        && matches!(profile.kind.as_str(), "windows" | "windows-pe-iso")
+        && (name.eq_ignore_ascii_case("boot/bcd") || name.eq_ignore_ascii_case("bcd"))
+    {
+        return Some(
+            crate::model::safe_file(&profile.root, "bootah-native/bcd")
+                .ok()
+                .and_then(|p| std::fs::read(p).ok())
+                .unwrap_or_default(),
+        );
+    }
+    if matches!(
+        name,
+        "grub.cfg"
+            | "grub/grub.cfg"
+            | "grub2/grub.cfg"
+            | "boot/grub2/grub.cfg"
+            | "boot/grub/grub.cfg"
+            | "boot/grub/x86_64-efi/grub.cfg"
+            | "bootah-native/grub.cfg"
+            | "bootah-native/grub/grub.cfg"
+    ) {
+        if let Some(config) = crate::native_uefi::grub(profile, settings, auto) {
+            return Some(config);
+        }
+    }
     if profile.kind == "windows-ris" && name.eq_ignore_ascii_case("winnt.sif") {
         return Some(crate::windows::ris_answer(
             profile,

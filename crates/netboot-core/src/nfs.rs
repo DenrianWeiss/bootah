@@ -643,7 +643,7 @@ pub fn configured_port_for(config: &crate::model::Config) -> Result<Option<u16>,
     if casper
         && (port.is_none() || configured_override("BOOTAH_PORTMAP_PORT", Some(111))? != Some(111))
     {
-        return Err("Casper NFS requires NFS and portmapper on port 111. Casper NFS 需要启用 NFS 和 111 端口的 portmapper。".into());
+        return Err("Casper NFS requires NFS and portmapper on port 111.".into());
     }
     Ok(port)
 }

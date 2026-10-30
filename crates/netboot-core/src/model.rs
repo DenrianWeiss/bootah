@@ -56,6 +56,8 @@ impl Default for Settings {
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Profile {
+    #[serde(default)]
+    pub secure_boot: Option<crate::secure_boot::Support>,
     pub id: String,
     pub name: String,
     #[serde(default)]

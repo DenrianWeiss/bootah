@@ -157,7 +157,7 @@ pub fn prepare(source: &Path, root: &Path, id: &str) -> Result<Option<ImportResu
         if !sets {
             warnings.push(format!("NetBSD {port}: ISO lacks installation sets"));
         }
-        profiles.push(Profile {
+        profiles.push(Profile { secure_boot: None,
             system_id: String::new(),
             system_name: String::new(),
             id: format!("{id}-{port}"),

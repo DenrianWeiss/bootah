@@ -255,7 +255,7 @@ pub fn prepare(source: &Path, root: &Path, id: &str) -> Result<Option<ImportResu
         fs::write(root.join("winpeshl.ini"), WINPESHL_INI).map_err(|e| e.to_string())?;
     }
     Ok(Some(ImportResult {
-        profiles: vec![Profile {
+        profiles: vec![Profile { secure_boot: None,
             system_id: String::new(),
             system_name: String::new(),
             id: id.into(),
@@ -320,7 +320,7 @@ fn prepare_ris(
         "RIS PXE/TFTP and internal read-only SMB1 RemInst source prepared; {driver_count} network adapters indexed for BINL"
     );
     Ok(ImportResult {
-        profiles: vec![Profile {
+        profiles: vec![Profile { secure_boot: None,
             system_id: String::new(),
             system_name: String::new(),
             id: id.into(),
