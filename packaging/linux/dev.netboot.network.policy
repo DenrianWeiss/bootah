@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN" "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>Netboot</vendor>
+  <action id="dev.netboot.network">
+    <description>Open network boot sockets</description>
+    <description xml:lang="zh_CN">打开网络启动套接字</description>
+    <message>Authentication is required to access the network</message>
+    <message xml:lang="zh_CN">访问网络需要管理员授权</message>
+    <defaults><allow_any>auth_admin</allow_any><allow_inactive>auth_admin</allow_inactive><allow_active>auth_admin_keep</allow_active></defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/netboot-socket-helper</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">--socket-helper</annotate>
+  </action>
+</policyconfig>

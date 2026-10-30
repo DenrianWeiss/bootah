@@ -1,0 +1,55 @@
+[package]
+name = "netboot-core"
+version = "0.1.0"
+edition = "2024"
+
+[build-dependencies]
+serde_json = "1"
+
+[[bin]]
+name = "netboot-core"
+path = "src/main.rs"
+
+[[bin]]
+name = "netboot-tui"
+path = "src/tui_entry.rs"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio-util = { version = "0.7", features = ["io"] }
+libloading = "0.8"
+libc = "0.2"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+uuid = { version = "1", features = ["v4"] }
+regex = "1"
+
+tower-http = { version = "0.6", features = ["fs"] }
+tower = { version = "0.5", features = ["util"] }
+futures-util = "0.3"
+cab = "0.6"
+fatfs = { version = "0.3", default-features = false, features = ["std", "alloc"] }
+tar = "0.4"
+ar = "0.9"
+lzma-rust2 = { version = "0.24", default-features = false, features = ["std", "xz"] }
+ruzstd = "0.9"
+bzip2 = "0.6"
+lz4_flex = "0.11"
+backhand = { version = "0.25.5", default-features = false, features = ["error-strings"] }
+libmkiso = { version = "=0.1.5", default-features = false }
+
+nfsserve = "0.11"
+async-trait = "0.1"
+md4 = "0.10"
+md-5 = "0.10"
+hmac = "0.12"
+sha2 = "0.10"
+rc4 = "0.1"
+subtle = "2"
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
+crossterm = "0.29"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock"] }
