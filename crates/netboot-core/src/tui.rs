@@ -49,7 +49,7 @@ enum DialogKind {
     Network,
     Assign,
     DefaultProfile,
-    ImageDetails,
+    ImageSettings,
     PermissionDetails,
     DeleteDevice,
     DeviceConflict,
@@ -370,7 +370,7 @@ fn draw(frame: &mut Frame, app: &App, manager: &Manager) {
     let keys = match app.page {
         Page::Devices => "←/→ Pages   ↑/↓ Select   Enter Assign image   a Add   d Delete   q Quit",
         Page::Profiles => {
-            "←/→ Pages   ↑/↓ Select   v Details   t Toggle Secure Boot   m Boot method   c Check again   i Import ISO   d Default images   q Quit"
+            "←/→ Pages   ↑/↓ Select   v/e Image settings   t Toggle Secure Boot   m Boot method   c Check again   i Import ISO   d Default images   q Quit"
         }
         Page::Activity => "←/→ Pages   ↑/↓ Scroll   Home Top   c Clear logs   q Quit",
         Page::Network => "←/→ Pages   e Edit settings   s Start/stop services   q Quit",
@@ -691,7 +691,7 @@ fn draw_dialog(frame: &mut Frame, app: &App, dialog: &Dialog, manager: &Manager)
     frame.render_widget(Clear, area);
     if matches!(
         dialog.kind,
-        DialogKind::ImageDetails | DialogKind::PermissionDetails
+        DialogKind::PermissionDetails
     ) {
         let lines = dialog
             .fields
@@ -769,7 +769,7 @@ fn draw_dialog(frame: &mut Frame, app: &App, dialog: &Dialog, manager: &Manager)
         DialogKind::Network => "Network settings",
         DialogKind::Assign => "Assign image",
         DialogKind::DefaultProfile => "Set default image",
-        DialogKind::ImageDetails => "Image details",
+        DialogKind::ImageSettings => "Image settings",
         DialogKind::PermissionDetails => "Network permissions",
         DialogKind::DeleteDevice => "Delete device?",
         DialogKind::DeviceConflict => "Remove old device record?",
@@ -781,6 +781,7 @@ fn draw_dialog(frame: &mut Frame, app: &App, dialog: &Dialog, manager: &Manager)
         .fields
         .iter()
         .enumerate()
+        .skip(if matches!(dialog.kind, DialogKind::ImageSettings) {dialog.focus.saturating_sub(1)} else {0})
         .map(|(i, (label, value))| {
             let value = if matches!(dialog.kind, DialogKind::Smb) {
                 match value.as_str() {
@@ -818,7 +819,7 @@ fn draw_dialog(frame: &mut Frame, app: &App, dialog: &Dialog, manager: &Manager)
                 ),
                 Span::styled(
                     value,
-                    if i == dialog.focus || matches!(dialog.kind, DialogKind::Smb) {
+                    if (i == dialog.focus && (!matches!(dialog.kind, DialogKind::ImageSettings) || i==0 || i==1 && label=="Arguments")) || matches!(dialog.kind, DialogKind::Smb) {
                         Style::default()
                             .fg(Color::Yellow)
                             .add_modifier(Modifier::UNDERLINED)
@@ -1026,7 +1027,7 @@ async fn handle_key(app: &mut App, key: KeyEvent, manager: &Manager) {
             let m=manager.clone();app.job_running=true;
             app.job=Some(tokio::spawn(async move {crate::web::secure_boot_mode_action(m,p.id,mode).await}));
         }
-        KeyCode::Char('v') if app.page == Page::Profiles && count > 0 => {
+        KeyCode::Char('v' | 'e') if app.page == Page::Profiles && count > 0 => {
             let id={let store=manager.state.lock().unwrap();store.config.profiles[app.selected.min(count-1)].id.clone()};
             if let Err(e)=crate::web::secure_boot_details(manager.clone(),id).await {app.notice=app.tr(&e);}
             let store = manager.state.lock().unwrap();
@@ -1038,6 +1039,7 @@ async fn handle_key(app: &mut App, key: KeyEvent, manager: &Manager) {
                 ("Directory".into(), p.root.display().to_string()),
                 ("Image file".into(), p.media.clone()),
             ];
+            if crate::boot_options::editable(p) {fields.insert(1,("Arguments".into(),p.arguments.clone()));}
             let support=crate::secure_boot::support(p);
             if support.eligible {
                 fields.push(("Secure Boot support".into(),format!("{} {}",if support.enabled {app.tr("Enabled")} else {app.tr("Disabled")},app.tr(&support.detail))));
@@ -1064,11 +1066,10 @@ async fn handle_key(app: &mut App, key: KeyEvent, manager: &Manager) {
                     ),
                 ]);
             }
-            fields.push(("Arguments".into(), p.arguments.clone()));
             fields.extend(p.boot_files.iter().map(|(k, v)| (k.clone(), v.clone())));
-            fields.retain(|(_, v)| !v.is_empty());
+            fields=fields.into_iter().enumerate().filter(|(i,(_,v))|*i<2||!v.is_empty()).map(|(_,field)|field).collect();
             app.dialog = Some(Dialog {
-                kind: DialogKind::ImageDetails,
+                kind: DialogKind::ImageSettings,
                 fields,
                 focus: 0,
             });
@@ -1316,7 +1317,7 @@ async fn handle_dialog(app: &mut App, key: KeyEvent, manager: &Manager) {
     }
     if matches!(
         dialog.kind,
-        DialogKind::ImageDetails | DialogKind::PermissionDetails
+        DialogKind::PermissionDetails
     ) {
         match key.code {
             KeyCode::Esc | KeyCode::Enter => {
@@ -1419,6 +1420,7 @@ async fn handle_dialog(app: &mut App, key: KeyEvent, manager: &Manager) {
             };
             return;
         }
+        KeyCode::Backspace | KeyCode::Char(_) if matches!(dialog.kind, DialogKind::ImageSettings) && dialog.focus>=if dialog.fields.get(1).is_some_and(|(label,_)|label=="Arguments") {2}else{1} && !key.modifiers.contains(KeyModifiers::CONTROL) => return,
         KeyCode::Backspace => {
             dialog.fields[dialog.focus].1.pop();
             return;
@@ -1439,7 +1441,7 @@ async fn handle_dialog(app: &mut App, key: KeyEvent, manager: &Manager) {
             if dialog.focus + 1 < dialog.fields.len()
                 && !matches!(
                     dialog.kind,
-                    DialogKind::Assign | DialogKind::DefaultProfile | DialogKind::DeleteDevice
+                    DialogKind::Assign | DialogKind::DefaultProfile | DialogKind::DeleteDevice | DialogKind::ImageSettings
                 )
             {
                 dialog.focus += 1;
@@ -1454,7 +1456,7 @@ async fn handle_dialog(app: &mut App, key: KeyEvent, manager: &Manager) {
             if dialog.focus + 1 < dialog.fields.len()
                 && !matches!(
                     dialog.kind,
-                    DialogKind::Assign | DialogKind::DefaultProfile | DialogKind::DeleteDevice
+                    DialogKind::Assign | DialogKind::DefaultProfile | DialogKind::DeleteDevice | DialogKind::ImageSettings
                 )
             {
                 dialog.focus += 1;
@@ -1465,6 +1467,14 @@ async fn handle_dialog(app: &mut App, key: KeyEvent, manager: &Manager) {
     }
     let dialog = app.dialog.take().unwrap();
     let result: Result<String, String> = match dialog.kind {
+        DialogKind::ImageSettings => {
+            let mut p = {let store=manager.state.lock().unwrap();store.config.profiles[app.selected].clone()};
+            p.name=dialog.fields[0].1.clone();if dialog.fields.get(1).is_some_and(|(label,_)|label=="Arguments") {p.arguments=dialog.fields[1].1.clone();}
+            match crate::web::update_image(manager.clone(),p).await {
+                Ok(message)=>Ok(message),
+                Err(error)=>{app.dialog=Some(dialog);app.notice=app.tr(&error);return;}
+            }
+        }
         DialogKind::NewDevice => add_device(manager, &dialog.fields),
         DialogKind::EditDevice => edit_device(manager, app.selected, &dialog.fields),
         DialogKind::Import => {
@@ -1513,7 +1523,7 @@ async fn handle_dialog(app: &mut App, key: KeyEvent, manager: &Manager) {
         },
         DialogKind::Assign => assign_profile(manager, app.selected, &dialog.fields),
         DialogKind::DefaultProfile => set_default(manager, &dialog.fields),
-        DialogKind::ImageDetails | DialogKind::PermissionDetails => unreachable!(),
+        DialogKind::PermissionDetails => unreachable!(),
         DialogKind::DeleteDevice => delete_device(manager, app.selected, &dialog.fields),
         DialogKind::DeviceConflict => unreachable!(),
     };

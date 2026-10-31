@@ -81,6 +81,14 @@ impl MediaFs {
             Err(nfsstat3::NFS3ERR_NOTDIR)
         }
     }
+    fn size(&self, n: &Node) -> u64 {
+        if n.path == "boot/loader.conf.local" {
+            if let Ok(path) = crate::model::safe_file(&self.root, &n.path) {
+                if let Ok(metadata) = path.metadata() {return metadata.len();}
+            }
+        }
+        n.size
+    }
     fn attr(&self, id: u64) -> Result<fattr3, nfsstat3> {
         let n = self.node(id)?;
         Ok(fattr3 {
@@ -93,8 +101,8 @@ impl MediaFs {
             },
             mode: (n.mode as u32 & 0o777) & !0o222,
             nlink: if n.directory { 2 } else { 1 },
-            size: n.size,
-            used: n.size,
+            size: self.size(n),
+            used: self.size(n),
             fileid: id,
             fsid: 1,
             ..Default::default()
@@ -145,7 +153,8 @@ impl NFSFileSystem for MediaFs {
         if n.link.is_some() {
             return Err(nfsstat3::NFS3ERR_INVAL);
         }
-        if offset >= n.size {
+        let size = self.size(n);
+        if offset >= size {
             return Ok((Vec::new(), true));
         }
         let mut resource =
@@ -153,12 +162,12 @@ impl NFSFileSystem for MediaFs {
         resource
             .seek(SeekFrom::Start(offset))
             .map_err(|_| nfsstat3::NFS3ERR_IO)?;
-        let length = (n.size - offset).min(count as u64).min(u64::from(self.max_read)) as usize;
+        let length = (size - offset).min(count as u64).min(u64::from(self.max_read)) as usize;
         let mut data = vec![0; length];
         resource
             .read_exact(&mut data)
             .map_err(|_| nfsstat3::NFS3ERR_IO)?;
-        Ok((data, offset + length as u64 >= n.size))
+        Ok((data, offset + length as u64 >= size))
     }
     async fn fsinfo(&self, id: u64) -> Result<fsinfo3, nfsstat3> {
         Ok(fsinfo3 {

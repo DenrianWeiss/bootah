@@ -475,6 +475,22 @@ pub(crate) fn ris_answer(profile: &Profile, server: &str, original: &[u8]) -> Ve
             );
         }
     }
+    if !profile.arguments.is_empty() {
+        let mut updated=Vec::new();let mut setup=false;
+        for line in result.split(|b|*b==b'\n') {
+            let line=line.strip_suffix(b"\r").unwrap_or(line);
+            let text=String::from_utf8_lossy(line);let value=text.trim();
+            if value.starts_with('[') && value.ends_with(']') {
+                setup=value.eq_ignore_ascii_case("[SetupData]");
+                updated.extend_from_slice(line);updated.extend_from_slice(b"\r\n");
+                if setup {updated.extend_from_slice(format!("OsLoadOptions = \"{}\"\r\n",profile.arguments.replace(['\r','\n']," ")).as_bytes());}
+                continue;
+            }
+            if setup && value.split_once('=').is_some_and(|(key,_)|key.trim().eq_ignore_ascii_case("OsLoadOptions")) {continue;}
+            if !line.is_empty() {updated.extend_from_slice(line);updated.extend_from_slice(b"\r\n");}
+        }
+        return updated;
+    }
     result
 }
 
@@ -760,6 +776,11 @@ mod tests {
         assert!(custom.contains("ProductKey = SAMPLE"));
         assert!(custom.contains("/custom /fastdetect"));
         assert!(!custom.contains("ComputerName = *"));
+        let mut overridden=profile.clone();overridden.arguments="/sos /fastdetect /USER_OPTION".into();
+        let effective=String::from_utf8(ris_answer(&overridden,"192.0.2.1",b"[SetupData]\r\nOsLoadOptions=\"/old\"\r\n[UserData]\r\nComputerName=KEEP\r\n")).unwrap();
+        assert_eq!(effective.matches("OsLoadOptions").count(),1);
+        assert!(effective.contains("/sos /fastdetect /USER_OPTION"));assert!(!effective.contains("/old"));assert!(effective.contains("ComputerName=KEEP"));
+
     }
     #[test]
     fn pe_only_does_not_launch_missing_setup() {

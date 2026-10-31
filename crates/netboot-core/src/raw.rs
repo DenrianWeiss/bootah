@@ -370,6 +370,7 @@ pub struct Ethernet {
     virtual_wire: bool,
     mop: crate::mop::Server,
     last: crate::last::Server,
+    pending_frames: Vec<Vec<u8>>,
 }
 impl Ethernet {
     pub fn new(state: Shared, server_mac: [u8; 6], virtual_wire: bool) -> Self {
@@ -392,6 +393,7 @@ impl Ethernet {
             virtual_wire,
             mop: crate::mop::Server::default(),
             last: crate::last::Server::default(),
+            pending_frames: Vec::new(),
         }
     }
     pub fn handle(&mut self, frame: &[u8]) -> Option<Vec<u8>> {
@@ -594,15 +596,22 @@ impl Ethernet {
             ));
         }
         match transfer.session.acknowledge(data) {
-            Ok(tftp::Ack::Next) => Some(datagram(
-                self.server_mac,
-                client_mac,
-                server,
-                ip,
-                destination,
-                port,
-                &transfer.session.packet,
-            )),
+            Ok(tftp::Ack::Next) => {
+                self.pending_frames.extend(
+                    transfer.session.packets().skip(1).map(|packet| {
+                        datagram(self.server_mac, client_mac, server, ip, destination, port, packet)
+                    }),
+                );
+                Some(datagram(
+                    self.server_mac,
+                    client_mac,
+                    server,
+                    ip,
+                    destination,
+                    port,
+                    &transfer.session.packet,
+                ))
+            }
             Ok(tftp::Ack::Ignored) => None,
             Ok(tftp::Ack::Done) => {
                 self.transfers.remove(&destination);
@@ -629,7 +638,8 @@ impl Ethernet {
     }
     pub fn tick(&mut self) -> Vec<Vec<u8>> {
         let server = self.state.lock().unwrap().config.settings.server_ip;
-        let mut out = self.last.tick();
+        let mut out = std::mem::take(&mut self.pending_frames);
+        out.extend(self.last.tick());
         let mut expired = vec![];
         for (port, t) in &mut self.transfers {
             if t.session.expired() {
@@ -642,15 +652,15 @@ impl Ethernet {
                 continue;
             }
             match t.session.retry() {
-                Ok(true) => out.push(datagram(
+                Ok(true) => out.extend(t.session.packets().map(|packet| datagram(
                     self.server_mac,
                     t.mac,
                     server,
                     t.ip,
                     *port,
                     t.port,
-                    &t.session.packet,
-                )),
+                    packet,
+                ))),
                 Ok(false) => {}
                 Err(e) => {
                     expired.push(*port);
@@ -1075,7 +1085,9 @@ pub async fn wire(state: Shared, address: std::net::SocketAddr) -> Result<(), St
                                 if let Some(payload)=payload {let mut mac=[0;6];mac.copy_from_slice(&frame[6..12]);reply=Some(datagram([2,0,0,0,0,1],mac,server,ip,destination,port,&payload));}
                             }
                         }
-                        reply.or_else(||ethernet.handle(&frame)).into_iter().collect::<Vec<_>>()
+                        let mut responses=reply.or_else(||ethernet.handle(&frame)).into_iter().collect::<Vec<_>>();
+                        responses.append(&mut ethernet.pending_frames);
+                        responses
                     },
                     _=timer.tick()=>ethernet.tick(),else=>break
                 };

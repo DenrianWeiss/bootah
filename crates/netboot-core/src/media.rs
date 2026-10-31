@@ -325,7 +325,12 @@ fn prepare_debian_release_aliases(root: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-pub fn import_with_options(
+pub fn import_with_options(source: &Path, library: &Path, trust_local_iso: bool, linux_compat: bool) -> Result<ImportResult, String> {
+    let result = import_inner(source, library, trust_local_iso, linux_compat)?;
+    crate::boot_options::remember_defaults(&result.profiles)?;
+    Ok(result)
+}
+fn import_inner(
     source: &Path,
     library: &Path,
     trust_local_iso: bool,
@@ -348,6 +353,9 @@ pub fn import_with_options(
     let result: Result<ImportResult, String> = (|| {
         let raw_header = prefix(&source, 128);
         if raw_header.get(0x60..0x68) == Some(b"aboot-00") {
+            if let Some(result) = crate::alpha_srm::import_netboot(&source, &root, &id)? {
+                return Ok(result);
+            }
             fs::copy(&source, root.join("boot.img")).map_err(err)?;
             let note = "aboot netboot image; SRM BOOTP/TFTP loads it directly".to_string();
             return Ok(ImportResult {

@@ -564,6 +564,8 @@ pub fn router(manager: Manager, token: String) -> Router {
             get(automation_methods),
         )
         .route("/api/profiles/{id}", delete(remove_profile))
+        .route("/api/profiles/{id}/settings", put(image_settings))
+        .route("/api/profiles/{id}/parameters", get(image_parameters).post(preview_parameters))
         .route("/api/profiles/{id}/compatibility", put(profile_compatibility))
         .route("/api/profiles/{id}/secure-boot", get(secure_boot_status).put(secure_boot_switch))
         .route("/api/profiles/{id}/secure-boot/check", post(secure_boot_check))
@@ -871,10 +873,33 @@ async fn remove_device(
     }
     Ok(StatusCode::NO_CONTENT)
 }
-async fn profile(
-    State(m): State<Manager>,
-    Json(mut p): Json<Profile>,
-) -> Result<Json<Profile>, ApiError> {
+async fn image_parameters(State(m): State<Manager>, Path(id): Path<String>) -> Result<Json<serde_json::Value>,ApiError> {
+    let s=m.state.lock().unwrap();
+    let p=s.config.profiles.iter().find(|p|p.id==id).ok_or_else(||bad("Unknown system"))?;
+    Ok(Json(crate::boot_options::parameter_info(p,&s.config.settings).map_err(bad)?))
+}
+async fn preview_parameters(State(m): State<Manager>, Path(id): Path<String>, Json(p): Json<Profile>) -> Result<Json<serde_json::Value>,ApiError> {
+    let s=m.state.lock().unwrap();
+    let old=s.config.profiles.iter().find(|p|p.id==id).ok_or_else(||bad("Unknown system"))?;
+    if p.id!=id || p.root!=old.root {return Err(bad("Invalid system name or ID"));}
+    Ok(Json(crate::boot_options::parameter_info(&p,&s.config.settings).map_err(bad)?))
+}
+#[derive(Deserialize)]
+struct ImageSettingsRequest {
+    profile: Profile,
+    secure_boot: Option<SecureBootRequest>,
+}
+async fn image_settings(State(m): State<Manager>, Path(id): Path<String>, Json(request): Json<ImageSettingsRequest>) -> Result<Json<Profile>, ApiError> {
+    if request.profile.id != id { return Err(bad("Invalid system name or ID")); }
+    save_profile(m, request.profile, request.secure_boot).await
+}
+async fn profile(State(m): State<Manager>, Json(p): Json<Profile>) -> Result<Json<Profile>, ApiError> {
+    save_profile(m, p, None).await
+}
+pub async fn update_image(m: Manager, p: Profile) -> Result<String, String> {
+    save_profile(m, p, None).await.map(|_| "Image settings saved".into()).map_err(|(_, error)| error)
+}
+async fn save_profile(m: Manager, mut p: Profile, secure_boot: Option<SecureBootRequest>) -> Result<Json<Profile>, ApiError> {
     if !valid_id(&p.id) || p.name.trim().is_empty() {
         return Err(bad("Invalid system name or ID"));
     }
@@ -892,9 +917,6 @@ async fn profile(
             }
         }
     }
-    if p.arguments.contains(['\n', '\r']) {
-        return Err(bad("Kernel arguments must be one line"));
-    }
     if !matches!(
         p.kind.as_str(),
         "linux" | "bsd" | "windows" | "windows-pe-iso" | "windows-ris" | "fit" | "raw" | "solaris"
@@ -902,14 +924,28 @@ async fn profile(
         return Err(bad("Unknown system kind"));
     }
     let _guard = m.lifecycle.lock().await;
-    {
-        let state=m.state.lock().unwrap();
-        if let Some(old)=state.config.profiles.iter().find(|o|o.id==p.id) {
-            if crate::secure_boot::enabled(old) {return Err(bad("Turn off Secure Boot support before editing"));}
-        }
+    let existing = {
+        let state = m.state.lock().unwrap();
+        state.config.profiles.iter().find(|o| o.id == p.id).cloned()
+            .map(|old| (old, state.config.settings.clone()))
+    };
+    if let Some((old, settings)) = existing.filter(|(old, _)| crate::secure_boot::enabled(old)) {
+        p = crate::secure_boot::edit(&old, &p, &settings).map_err(bad)?;
+    } else {
+        if crate::secure_boot::enabled(&p) { return Err(bad("Use the Secure Boot support setting")); }
+        p.secure_boot = Some(crate::secure_boot::Support {
+            eligible: crate::secure_boot::eligible(&p), state: "unchecked".into(), ..Default::default()
+        });
     }
-    if crate::secure_boot::enabled(&p) {return Err(bad("Use the Secure Boot support setting"));}
-    p.secure_boot=Some(crate::secure_boot::Support {eligible:crate::secure_boot::eligible(&p),state:"unchecked".into(),..Default::default()});
+    if let Some(request) = secure_boot {
+        let settings = m.state.lock().unwrap().config.settings.clone();
+        if request.enabled && (!crate::secure_boot::enabled(&p)
+            || request.mode.as_deref().is_some_and(|mode| mode != crate::secure_boot::support(&p).mode)) {
+            p.secure_boot = Some(crate::secure_boot::check(&p, &settings).map_err(bad)?);
+        }
+        p = crate::secure_boot::switch_mode(&p, &settings, request.enabled, request.mode.as_deref()).map_err(bad)?;
+    }
+    let mut freebsd_edit = crate::boot_options::FreeBsdEdit::stage(&p).map_err(bad)?;
     if m.is_running() {
         let mut candidate = m.state.lock().unwrap().config.clone();
         if candidate.default_profiles.iter().any(|(architecture, id)| id == &p.id && !p.boot_files.contains_key(architecture)) {
@@ -937,6 +973,7 @@ async fn profile(
         s.config.profiles = previous;
         return Err(bad(e));
     }
+    if let Some(edit) = freebsd_edit.as_mut() { edit.commit(); }
     Ok(Json(p))
 }
 async fn remove_profile(

@@ -95,6 +95,26 @@ pub fn support(p: &Profile) -> Support {
     }
     s
 }
+/// Preserve the active route and server-owned evidence when editing a secured image.
+pub fn edit(old: &Profile, proposed: &Profile, _settings: &Settings) -> Result<Profile, String> {
+    let mut allowed = old.clone();
+    allowed.name = proposed.name.clone();
+    allowed.arguments = proposed.arguments.clone();
+    let mut requested = proposed.clone();
+    requested.secure_boot = old.secure_boot.clone();
+    if serde_json::to_value(&allowed).map_err(|e| e.to_string())?
+        != serde_json::to_value(&requested).map_err(|e| e.to_string())? {
+        return Err("Secure Boot allows editing the name and boot parameters only".into());
+    }
+    if old.arguments != proposed.arguments {
+        validate_current(old)?;
+        let mut checked=old.secure_boot.clone().ok_or("Secure Boot check required")?;
+        checked.fingerprint=fingerprint(&allowed)?;
+        allowed.secure_boot=Some(checked);
+    }
+    Ok(allowed)
+}
+
 fn normal(p: &Profile) -> Result<Profile, String> {
     let mut original = p.clone();
     if enabled(p) {
@@ -295,6 +315,21 @@ pub fn switch_mode(p: &Profile, settings: &Settings, enabled: bool, mode: Option
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn secured_edits_keep_routes_and_protect_component_fields() {
+        let old: Profile = serde_json::from_value(serde_json::json!({
+            "id":"p", "name":"before", "root":"/tmp", "kind":"bsd", "architecture":"x64",
+            "boot_files":{"x64-efi":"bootah-ipxe-test/ipxe-shim.efi"}
+        })).unwrap();
+        let mut changed = old.clone();
+        changed.name = "after".into();
+        let saved = edit(&old, &changed, &Settings::default()).unwrap();
+        assert_eq!(saved.name, "after");
+        assert_eq!(saved.boot_files, old.boot_files);
+
+        changed.kernel = "other".into();
+        assert!(edit(&old, &changed, &Settings::default()).err().unwrap().contains("boot parameters"));
+    }
     #[test]
     fn modes_follow_distribution_policy() {
         let mut p: Profile=serde_json::from_value(serde_json::json!({"id":"p","name":"p","root":"/tmp","kind":"linux","system_id":"ubuntu","architecture":"x64","media":"test.iso"})).unwrap();

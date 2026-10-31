@@ -34,6 +34,10 @@ pub struct Session {
     final_packet: bool,
     pub sent: Instant,
     retries: u8,
+    window_size: usize,
+    window: std::collections::VecDeque<(u16, Vec<u8>)>,
+    last_ack: u16,
+    pending: Vec<Vec<u8>>,
 }
 impl Session {
     pub fn begin(state: &Shared, request: &[u8], ip: Ipv4Addr) -> Result<Self, Vec<u8>> {
@@ -192,22 +196,25 @@ impl Session {
                 let size = bytes.len() as u64;
                 (Box::new(Cursor::new(bytes)), size)
             } else {
-                let file = crate::media_source::open(&profile.root, crate::native_uefi::resource_name(&profile, name))
-                    .or_else(|err| {
-                        if profile.kind != "windows-ris" {
-                            return Err(err);
-                        }
-                        let path = name.replace('\\', "/");
-                        let fallback =
-                            crate::windows::ris_fallback_name(&profile, &path).ok_or(err)?;
-                        crate::media_source::open(&profile.root, &fallback)
-                    })
-                    .map_err(|_| error(1, "File unavailable"))?;
+                let file = crate::media_source::open(
+                    &profile.root,
+                    crate::native_uefi::resource_name(&profile, name),
+                )
+                .or_else(|err| {
+                    if profile.kind != "windows-ris" {
+                        return Err(err);
+                    }
+                    let path = name.replace('\\', "/");
+                    let fallback = crate::windows::ris_fallback_name(&profile, &path).ok_or(err)?;
+                    crate::media_source::open(&profile.root, &fallback)
+                })
+                .map_err(|_| error(1, "File unavailable"))?;
                 let size = file.size;
                 (Box::new(BufReader::new(file)), size)
             }
         };
         let mut block_size = 512;
+        let mut window_size = 1;
         let mut oack = vec![0, 6];
         let mut keys = std::collections::HashSet::new();
         for pair in parts[2..].chunks_exact(2) {
@@ -216,6 +223,16 @@ impl Session {
                 return Err(error(8, "Duplicate option"));
             }
             let value = match key.as_str() {
+                "windowsize" if !writing => {
+                    let n = pair[1]
+                        .parse::<u16>()
+                        .map_err(|_| error(8, "Invalid window size"))?;
+                    if n == 0 {
+                        return Err(error(8, "Invalid window size"));
+                    }
+                    window_size = usize::from(n).min(8);
+                    Some(window_size.to_string())
+                }
                 "blksize" => {
                     let n = pair[1]
                         .parse::<usize>()
@@ -270,6 +287,10 @@ impl Session {
             final_packet: false,
             sent: Instant::now(),
             retries: 0,
+            window_size,
+            window: std::collections::VecDeque::new(),
+            last_ack: 0,
+            pending: Vec::new(),
         };
         if session.packet.len() == 2 {
             if writing {
@@ -308,6 +329,20 @@ impl Session {
         self.retries = 0;
         Ok(())
     }
+    fn fill_window(&mut self) -> Result<(), String> {
+        while self.window.len() < self.window_size && !self.final_packet {
+            self.advance().map_err(|e| e.to_string())?;
+            self.window.push_back((self.block, self.packet.clone()));
+        }
+        self.packet = self.window.front().ok_or("Empty TFTP window")?.1.clone();
+        self.pending = self.window.iter().skip(1).map(|(_, p)| p.clone()).collect();
+        self.sent = Instant::now();
+        self.retries = 0;
+        Ok(())
+    }
+    pub fn packets(&self) -> impl Iterator<Item = &[u8]> {
+        std::iter::once(self.packet.as_slice()).chain(self.pending.iter().map(Vec::as_slice))
+    }
     pub fn acknowledge(&mut self, data: &[u8]) -> Result<Ack, String> {
         if data.get(..2) == Some(&[0, 5]) {
             return Err("Client aborted transfer".into());
@@ -341,6 +376,23 @@ impl Session {
                     .map_err(|e| e.to_string())?;
                 self.completed = true;
             }
+            return Ok(Ack::Next);
+        }
+        if self.window_size > 1 {
+            if data.len() != 4 || data[..2] != [0, 4] {
+                return Ok(Ack::Ignored);
+            }
+            let block = u16::from_be_bytes([data[2], data[3]]);
+            if let Some(index) = self.window.iter().position(|(n, _)| *n == block) {
+                self.window.drain(..=index);
+                self.last_ack = block;
+            } else if !self.window.is_empty() || block != self.last_ack {
+                return Ok(Ack::Ignored);
+            }
+            if self.window.is_empty() && self.final_packet {
+                return Ok(Ack::Done);
+            }
+            self.fill_window()?;
             return Ok(Ack::Next);
         }
         if data.len() != 4 || data[..2] != [0, 4] || data[2..4] != self.block.to_be_bytes() {
@@ -414,10 +466,12 @@ async fn transfer(state: Shared, request: Vec<u8>, peer: SocketAddr) -> Result<(
             return Ok(());
         }
     };
-    socket
-        .send_to(&session.packet, peer)
-        .await
-        .map_err(|e| e.to_string())?;
+    for packet in session.packets() {
+        socket
+            .send_to(packet, peer)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
     let mut buffer = [0; 4096];
     loop {
         tokio::select! {
@@ -428,11 +482,11 @@ async fn transfer(state: Shared, request: Vec<u8>, peer: SocketAddr) -> Result<(
                     Ok(ack) => ack,
                     Err(e) => { let _ = socket.send_to(&error(0, "Transfer failed"), peer).await; return Err(e); }
                 };
-                match acknowledgement {Ack::Done=>{state.lock().unwrap().event(&ip.to_string(),"TFTP","Completed transfer");return Ok(())},Ack::Next=>{socket.send_to(&session.packet,peer).await.map_err(|e|e.to_string())?;},Ack::Ignored=>{}}
+                match acknowledgement {Ack::Done=>{state.lock().unwrap().event(&ip.to_string(),"TFTP","Completed transfer");return Ok(())},Ack::Next=>{for packet in session.packets() {socket.send_to(packet,peer).await.map_err(|e|e.to_string())?;}},Ack::Ignored=>{}}
             }
             _=tokio::time::sleep(Duration::from_millis(250))=>{
                 if session.expired() { state.lock().unwrap().event(&ip.to_string(), "TFTP", session.upload_summary()); return Ok(()); }
-                if session.retry()?{socket.send_to(&session.packet,peer).await.map_err(|e|e.to_string())?;}
+                if session.retry()?{for packet in session.packets() {socket.send_to(packet,peer).await.map_err(|e|e.to_string())?;}}
             }
         }
     }
@@ -445,5 +499,60 @@ pub async fn run(state: Shared, socket: UdpSocket) -> Result<(), String> {
             packet=socket.recv_from(&mut buffer)=>{let(n,peer)=packet.map_err(|e|e.to_string())?;if transfers.len()>=64{continue}let packet=buffer[..n].to_vec();let state=state.clone();transfers.spawn(async move{if let Err(e)=transfer(state.clone(),packet,peer).await{state.lock().unwrap().event(&peer.to_string(),"TFTP",e)}});},
             _=transfers.join_next(),if !transfers.is_empty()=>{}
         }
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+    fn session(bytes: usize, block: u16) -> Session {
+        Session {
+            upload: None,
+            completed: false,
+            reader: Box::new(Cursor::new(vec![7; bytes])),
+            packet: vec![0, 6],
+            block,
+            block_size: 8,
+            final_packet: false,
+            sent: Instant::now(),
+            retries: 0,
+            window_size: 4,
+            window: Default::default(),
+            last_ack: block,
+            pending: Vec::new(),
+        }
+    }
+    fn ack(s: &mut Session, block: u16) -> Ack {
+        let [a, b] = block.to_be_bytes();
+        s.acknowledge(&[0, 4, a, b]).unwrap()
+    }
+    fn blocks(s: &Session) -> Vec<u16> {
+        s.packets()
+            .map(|p| u16::from_be_bytes([p[2], p[3]]))
+            .collect()
+    }
+    #[test]
+    fn partial_ack_restarts_window_and_exact_multiple_ends_with_empty_block() {
+        let mut s = session(64, 0);
+        assert!(matches!(ack(&mut s, 0), Ack::Next));
+        assert_eq!(blocks(&s), [1, 2, 3, 4]);
+        ack(&mut s, 2);
+        assert_eq!(blocks(&s), [3, 4, 5, 6]);
+        ack(&mut s, 2);
+        assert_eq!(blocks(&s), [3, 4, 5, 6]);
+        ack(&mut s, 6);
+        assert_eq!(blocks(&s), [7, 8, 9]);
+        assert_eq!(s.packets().last().unwrap().len(), 4);
+        assert!(matches!(ack(&mut s, 9), Ack::Done));
+    }
+    #[test]
+    fn window_recovery_crosses_block_number_wrap() {
+        let mut s = session(35, 65534);
+        ack(&mut s, 65534);
+        assert_eq!(blocks(&s), [65535, 0, 1, 2]);
+        assert!(matches!(ack(&mut s, 123), Ack::Ignored));
+        ack(&mut s, 0);
+        assert_eq!(blocks(&s), [1, 2, 3]);
+        assert!(matches!(ack(&mut s, 3), Ack::Done));
     }
 }

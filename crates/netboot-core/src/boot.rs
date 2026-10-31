@@ -193,6 +193,17 @@ fn uboot_manual(profile: &Profile, settings: &Settings, chinese: bool) -> Manual
     )
 }
 fn alpha(profile: &Profile, settings: &Settings, chinese: bool) -> ManualBoot {
+    if crate::alpha_srm::enabled(profile) {
+        return manual(
+            "srm", "Alpha SRM", "documented",
+            "show device\nboot -protocols bootp <net-device> -file bootah-srm.bin",
+            vec![
+                note(chinese, "Replace <net-device> with the firmware-supported Ethernet device from show device (for example ewa0, ewb0 or era0). Check the machine manual for console-specific syntax. The small loader downloads the Debian kernel and initrd separately.", "把 <net-device> 替换为 show device 列出的固件支持的以太网设备（如 ewa0、ewb0 或 era0），并按该机型手册核对控制台语法。小型引导器分别下载 Debian 内核和 initrd。"),
+                note(chinese, "With external DHCP, configure a BOOTP reservation, boot server and filename there; SRM does not use PXE ProxyDHCP.", "已有 DHCP 时，请在外部服务器配置 BOOTP 地址、启动服务器及文件名；SRM 不使用 PXE ProxyDHCP。"),
+                note(chinese, "Each target platform requires separate validation; ES40 results do not certify other Alpha systems.", "目标平台必须单独验证；ES40 的验收结果不代表其他 Alpha 平台已通过。"),
+            ],
+        );
+    }
     let openvms = profile.boot_files.contains_key("lad")
         || profile
             .boot_files
@@ -556,9 +567,7 @@ fn uboot_bootargs(profile: &Profile, settings: &Settings) -> Result<Option<Strin
     if arguments.is_empty() {
         return Ok(None);
     }
-    if arguments.contains(['\'', '\n', '\r']) {
-        return Err("Profile arguments contain characters that cannot be safely quoted in a U-Boot command; remove apostrophes and line breaks".into());
-    }
+    let arguments = arguments.replace(['\r','\n'], " ").replace('\'', "'\\''");
     Ok(Some(format!("setenv bootargs '{arguments}'")))
 }
 pub fn uboot(profile: &Profile, settings: &Settings) -> Result<String, String> {
@@ -588,6 +597,13 @@ pub fn virtual_file(
     settings: &Settings,
     auto: Option<&AutoConfig>,
 ) -> Option<Vec<u8>> {
+    if name == "bootah-srm.cfg" {
+        return crate::alpha_srm::config(profile, settings, auto);
+    }
+    if (profile.kind == "windows" || profile.kind == "windows-pe-iso" && crate::native_uefi::enabled(profile)) && !profile.arguments.is_empty()
+        && (name.eq_ignore_ascii_case("boot/bcd") || name.eq_ignore_ascii_case("bcd")) {
+        return Some(crate::boot_options::windows(profile).unwrap_or_default());
+    }
     if crate::native_uefi::enabled(profile)
         && matches!(profile.kind.as_str(), "windows" | "windows-pe-iso")
         && (name.eq_ignore_ascii_case("boot/bcd") || name.eq_ignore_ascii_case("bcd"))
@@ -636,7 +652,7 @@ pub fn virtual_file(
         return Some(b"@echo off\r\nwpeinit\r\necho Bootah: Windows PE is ready. Use a complete installation ISO for Windows Setup.\r\nexit /b 0\r\n".to_vec());
     }
     if profile.kind == "bsd" && name == "boot.cfg" && profile.kernel.starts_with("netbsd") {
-        let flags = bsd_flags(&profile.arguments, "1234abcdmqsvxz")?;
+        let flags = bsd_flags(&profile.arguments);
         let boot = if profile.initrd.is_empty() {
             format!("boot tftp:{}{}", profile.kernel, flags)
         } else {
@@ -645,7 +661,7 @@ pub fn virtual_file(
         return Some(format!("menu=Install NetBSD:{boot}\ntimeout=0\n").into_bytes());
     }
     if profile.kind == "bsd" && name == "etc/boot.conf" && profile.kernel.ends_with("bsd.rd") {
-        let flags = bsd_flags(&profile.arguments, "acds")?;
+        let flags = bsd_flags(&profile.arguments);
         return Some(format!("boot {}{}\n", profile.kernel, flags).into_bytes());
     }
     if crate::signed_ipxe::is_script(profile, name) {
@@ -665,17 +681,8 @@ pub fn virtual_file(
     None
 }
 
-fn bsd_flags(arguments: &str, allowed: &str) -> Option<String> {
-    if arguments.is_empty() {
-        return Some(String::new());
-    }
-    if arguments
-        .split_whitespace()
-        .any(|flag| !flag.starts_with('-') || !flag[1..].chars().all(|c| allowed.contains(c)))
-    {
-        return None;
-    }
-    Some(format!(" {arguments}"))
+fn bsd_flags(arguments: &str) -> String {
+    if arguments.is_empty() {String::new()} else {format!(" {}", arguments.replace(['\r','\n']," "))}
 }
 
 #[cfg(test)]

@@ -185,21 +185,14 @@ impl Server {
                 } else {
                     return None;
                 };
-                let mut body = vec![3, message[17], 3, 3, 2, 16];
+                let mut body = vec![3, message[17], 3, 3, 2, SERVICE.len() as u8];
                 body.extend(SERVICE);
-                body.resize(22, b' ');
+                body.resize(22, 0);
                 body.extend(&message[38..42]);
                 short(&mut body, class);
                 short(&mut body, 100);
                 short(&mut body, 1);
-                text(
-                    &mut body,
-                    if name.is_empty() && class == 1 {
-                        SERVICE
-                    } else {
-                        name
-                    },
-                );
+                text(&mut body, name);
                 short(&mut body, application.len() as u16);
                 body.extend(application);
                 state.lock().unwrap().event(
@@ -237,9 +230,9 @@ impl Server {
                 short(&mut body, 0);
                 short(&mut body, word(message, 28).clamp(3, 60));
                 short(&mut body, 1);
-                body.push(16);
+                body.push(SERVICE.len() as u8);
                 body.extend(SERVICE);
-                body.resize(33, b' ');
+                body.resize(33, 0);
                 Some(frame(server, client, 2, peer, &body))
             }
             3 => {
