@@ -21,6 +21,7 @@ mod media_source;
 mod model;
 mod mop;
 mod native_uefi;
+mod signed_ipxe;
 mod secure_boot;
 mod nbd;
 mod netbsd;

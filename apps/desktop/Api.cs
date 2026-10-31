@@ -38,7 +38,7 @@ public record Profile {
     public BootEvidence? BootEvidence {get;set;}
     public override string ToString() => Name;
 }
-public record SecureBootSupport(bool Eligible,bool Enabled,string State,string Detail,SecureBootComponent[] Components);
+public record SecureBootSupport(bool Eligible,bool Enabled,string State,string Detail,SecureBootComponent[] Components,string? Mode=null,string[]? Modes=null);
 public record SecureBootComponent(string File,string Sha256,string Signer,string Issuer,string CertificateSha256);
 public record BootEvidence(string Config,string Entry,string Kernel,string Initrd,string Source,string Verification,BootDiagnostic[]? Diagnostics=null);
 public record BootDiagnostic(string Code,string Detail);

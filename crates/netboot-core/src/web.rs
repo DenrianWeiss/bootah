@@ -331,7 +331,7 @@ impl Manager {
         let native_config = config.clone();
         tokio::task::spawn_blocking(move || {
             for profile in &native_config.profiles {
-                if crate::native_uefi::enabled(profile) { crate::secure_boot::validate_current(profile)?; }
+                if crate::secure_boot::enabled(profile) { crate::secure_boot::validate_current(profile)?; }
                 if crate::native_uefi::enabled(profile) && profile.kind == "windows" {
                     crate::native_uefi::prepare_windows_wim(profile, &native_config.settings)?;
                 }
@@ -905,10 +905,10 @@ async fn profile(
     {
         let state=m.state.lock().unwrap();
         if let Some(old)=state.config.profiles.iter().find(|o|o.id==p.id) {
-            if crate::native_uefi::enabled(old) {return Err(bad("Turn off Secure Boot support before editing"));}
+            if crate::secure_boot::enabled(old) {return Err(bad("Turn off Secure Boot support before editing"));}
         }
     }
-    if crate::native_uefi::enabled(&p) {return Err(bad("Use the Secure Boot support setting"));}
+    if crate::secure_boot::enabled(&p) {return Err(bad("Use the Secure Boot support setting"));}
     p.secure_boot=Some(crate::secure_boot::Support {eligible:crate::secure_boot::eligible(&p),state:"unchecked".into(),..Default::default()});
     if m.is_running() {
         let mut candidate = m.state.lock().unwrap().config.clone();
@@ -1269,7 +1269,7 @@ async fn profile_compatibility(
     let (old, library) = {
         let s = m.state.lock().unwrap();
         let old = s.config.profiles.iter().find(|p| p.id == id).cloned().ok_or_else(|| bad("Unknown system"))?;
-        if crate::native_uefi::enabled(&old) {return Err(bad("Turn off Secure Boot support before changing compatibility mode"));}
+        if crate::secure_boot::enabled(&old) {return Err(bad("Turn off Secure Boot support before changing compatibility mode"));}
         if old.kind != "linux" || old.media.is_empty() {
             return Err(bad("Compatibility mode requires an imported Linux ISO."));
         }
@@ -1644,14 +1644,16 @@ async fn refresh_secure_boot(m:Manager,id:String,force:bool) -> Result<crate::se
     if !result.1 {return Ok(result.0);}
     let mut s=m.state.lock().unwrap();let previous=s.config.profiles.clone();
     let p=s.config.profiles.iter_mut().find(|p|p.id==id).ok_or_else(||bad("Unknown system"))?;
-    result.0.enabled=crate::native_uefi::enabled(p);
+    result.0.enabled=crate::secure_boot::enabled(p);
     p.secure_boot=Some(result.0.clone());
     if let Err(e)=s.save(){s.config.profiles=previous;return Err(bad(e));}Ok(result.0)
 }
-async fn secure_boot_switch(State(m):State<Manager>,Path(id):Path<String>,Json(request):Json<CompatibilityRequest>) -> Result<Json<Profile>,ApiError> {
+#[derive(Deserialize)]
+struct SecureBootRequest { enabled: bool, #[serde(default)] mode: Option<String> }
+async fn secure_boot_switch(State(m):State<Manager>,Path(id):Path<String>,Json(request):Json<SecureBootRequest>) -> Result<Json<Profile>,ApiError> {
     let _guard=m.lifecycle.lock().await;
     let (old,settings)={let s=m.state.lock().unwrap();(s.config.profiles.iter().find(|p|p.id==id).cloned().ok_or_else(||bad("Unknown system"))?,s.config.settings.clone())};
-    let changed=tokio::task::spawn_blocking(move ||crate::secure_boot::switch(&old,&settings,request.enabled)).await.map_err(|e|bad(e.to_string()))?.map_err(bad)?;
+    let changed=tokio::task::spawn_blocking(move ||crate::secure_boot::switch_mode(&old,&settings,request.enabled,request.mode.as_deref())).await.map_err(|e|bad(e.to_string()))?.map_err(bad)?;
     let mut s=m.state.lock().unwrap();
     if s.config.default_profiles.iter().any(|(arch,p)|p==&id && !changed.boot_files.contains_key(arch)) {return Err(bad("Remove incompatible architecture defaults before switching"));}
     let previous=s.config.profiles.clone();let p=s.config.profiles.iter_mut().find(|p|p.id==id).ok_or_else(||bad("Unknown system"))?;*p=changed.clone();
@@ -1659,10 +1661,14 @@ async fn secure_boot_switch(State(m):State<Manager>,Path(id):Path<String>,Json(r
 }
 
 pub async fn secure_boot_action(m:Manager,id:String,enabled:Option<bool>) -> Result<String,String> {
-    if let Some(enabled)=enabled {secure_boot_switch(State(m),Path(id),Json(CompatibilityRequest{enabled})).await.map(|_|"Secure Boot support updated".into()).map_err(|(_,e)|e)}
+    if let Some(enabled)=enabled {secure_boot_switch(State(m),Path(id),Json(SecureBootRequest{enabled,mode:None})).await.map(|_|"Secure Boot support updated".into()).map_err(|(_,e)|e)}
     else {secure_boot_check(State(m),Path(id)).await.map(|Json(s)|s.detail).map_err(|(_,e)|e)}
 }
 
 pub async fn secure_boot_details(m:Manager,id:String) -> Result<crate::secure_boot::Support,String> {
     refresh_secure_boot(m,id,false).await.map_err(|(_,error)|error)
+}
+
+pub async fn secure_boot_mode_action(m:Manager,id:String,mode:String) -> Result<String,String> {
+    secure_boot_switch(State(m),Path(id),Json(SecureBootRequest{enabled:true,mode:Some(mode)})).await.map(|_|"Applies to subsequent boots".into()).map_err(|(_,e)|e)
 }

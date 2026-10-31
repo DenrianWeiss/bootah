@@ -370,7 +370,7 @@ fn draw(frame: &mut Frame, app: &App, manager: &Manager) {
     let keys = match app.page {
         Page::Devices => "←/→ Pages   ↑/↓ Select   Enter Assign image   a Add   d Delete   q Quit",
         Page::Profiles => {
-            "←/→ Pages   ↑/↓ Select   v Details   t Toggle Secure Boot   i Import ISO   d Default images   q Quit"
+            "←/→ Pages   ↑/↓ Select   v Details   t Toggle Secure Boot   m Boot method   c Check again   i Import ISO   d Default images   q Quit"
         }
         Page::Activity => "←/→ Pages   ↑/↓ Scroll   Home Top   c Clear logs   q Quit",
         Page::Network => "←/→ Pages   e Edit settings   s Start/stop services   q Quit",
@@ -862,7 +862,7 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
 }
 
 async fn handle_key(app: &mut App, key: KeyEvent, manager: &Manager) {
-    if app.job_running && matches!(key.code, KeyCode::Char('r' | 'p' | 'i' | 'e' | 's' | 'c' | 't')) {
+    if app.job_running && matches!(key.code, KeyCode::Char('r' | 'p' | 'i' | 'e' | 's' | 'c' | 't' | 'm')) {
         return;
     }
     if app
@@ -1012,6 +1012,20 @@ async fn handle_key(app: &mut App, key: KeyEvent, manager: &Manager) {
             app.job_running=true;
             app.job=Some(tokio::spawn(async move {crate::web::secure_boot_action(m,p.id,Some(enabled)).await}));
         }
+        KeyCode::Char('c') if app.page == Page::Profiles && count > 0 => {
+            let id={let s=manager.state.lock().unwrap();s.config.profiles[app.selected.min(count-1)].id.clone()};
+            let m=manager.clone();app.job_running=true;
+            app.job=Some(tokio::spawn(async move {crate::web::secure_boot_action(m,id,None).await}));
+        }
+        KeyCode::Char('m') if app.page == Page::Profiles && count > 0 => {
+            let p={let s=manager.state.lock().unwrap();s.config.profiles[app.selected.min(count-1)].clone()};
+            let support=match crate::web::secure_boot_details(manager.clone(),p.id.clone()).await {Ok(s)=>s,Err(e)=>{app.notice=app.tr(&e);return;}};
+            if !support.enabled {app.notice=app.tr("Enable Secure Boot support first");return;}
+            if support.modes.len()<2 {app.notice=app.tr(if support.mode==crate::secure_boot::SHIM {"iPXE shim"}else{"Native network boot"});return;}
+            let mode=support.modes.iter().find(|mode|**mode!=support.mode).unwrap().clone();
+            let m=manager.clone();app.job_running=true;
+            app.job=Some(tokio::spawn(async move {crate::web::secure_boot_mode_action(m,p.id,mode).await}));
+        }
         KeyCode::Char('v') if app.page == Page::Profiles && count > 0 => {
             let id={let store=manager.state.lock().unwrap();store.config.profiles[app.selected.min(count-1)].id.clone()};
             if let Err(e)=crate::web::secure_boot_details(manager.clone(),id).await {app.notice=app.tr(&e);}
@@ -1027,6 +1041,7 @@ async fn handle_key(app: &mut App, key: KeyEvent, manager: &Manager) {
             let support=crate::secure_boot::support(p);
             if support.eligible {
                 fields.push(("Secure Boot support".into(),format!("{} {}",if support.enabled {app.tr("Enabled")} else {app.tr("Disabled")},app.tr(&support.detail))));
+                if support.enabled {fields.push(("Boot method".into(),app.tr(if support.mode==crate::secure_boot::SHIM {"iPXE shim"}else{"Native network boot"})));}
                 for c in support.components {fields.push((c.file,format!("{}\n{}\nSHA-256: {}\n{}",c.signer,c.issuer,c.sha256,c.certificate_sha256)));}
             }
             if let Some(e) = &p.boot_evidence {

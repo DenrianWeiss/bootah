@@ -267,8 +267,23 @@ class MainActivity : Activity() {
             panel.addView(TextView(this).apply{this.text=message(support.optString("detail")).ifBlank{t("尚未检查","Not checked")};setTextIsSelectable(true)})
             val results=Button(this).apply{this.text=t("查看检查结果","View check results");setOnClickListener{val items=support.optJSONArray("components")?:JSONArray();val content=(0 until items.length()).joinToString("\n\n"){i->val c=items.getJSONObject(i);"${c.optString("file")}\n${c.optString("signer")}\n${c.optString("issuer")}\nSHA-256: ${c.optString("sha256")}\n${c.optString("certificate_sha256")}"};AlertDialog.Builder(this@MainActivity).setTitle(t("查看检查结果","View check results")).setMessage(content.ifBlank{message(support.optString("detail"))}).setPositiveButton(tr("关闭"),null).show()}};panel.addView(results)
             val dialog=AlertDialog.Builder(this).setTitle(t("启动设置","Boot settings")).setView(ScrollView(this).apply{addView(panel)}).setNegativeButton(tr("关闭"),null).create()
-            toggle.setOnCheckedChangeListener{_,enabled->toggle.isEnabled=false;request("/api/profiles/$id/secure-boot","PUT",JSONObject().put("enabled",enabled),failed={dialog.dismiss();secureBootSettings(id)}){dialog.dismiss();refresh();secureBootSettings(id)}}
+            fun lockControls(view:View){view.isEnabled=false;if(view is android.view.ViewGroup)for(i in 0 until view.childCount)lockControls(view.getChildAt(i))}
+            toggle.setOnCheckedChangeListener{_,enabled->lockControls(panel);request("/api/profiles/$id/secure-boot","PUT",JSONObject().put("enabled",enabled),failed={dialog.dismiss();secureBootSettings(id)}){dialog.dismiss();refresh();secureBootSettings(id)}}
 
+            if(support.optBoolean("enabled")){
+                panel.addView(TextView(this).apply{this.text=t("启动方式","Boot method")})
+                val modes=support.optJSONArray("modes")?:JSONArray().put("media-native")
+                fun label(mode:String)=if(mode=="signed-ipxe")t("iPXE shim（使用签名 iPXE 引导）","iPXE shim (signed iPXE)") else t("原生网络启动（使用镜像内组件）","Native network boot (image components)")
+                if(modes.length()>1){
+                    val group=RadioGroup(this)
+                    for(i in 0 until modes.length())group.addView(RadioButton(this).apply{this.id=i+1;this.text=label(modes.getString(i));isChecked=modes.getString(i)==support.optString("mode")})
+                    group.setOnCheckedChangeListener{_,choice->if(choice>0){lockControls(panel);request("/api/profiles/$id/secure-boot","PUT",JSONObject().put("enabled",true).put("mode",modes.getString(choice-1)),failed={dialog.dismiss();secureBootSettings(id)}){dialog.dismiss();refresh();secureBootSettings(id)}}}
+                    panel.addView(group)
+                }else panel.addView(TextView(this).apply{this.text=label(modes.optString(0))})
+                panel.addView(TextView(this).apply{this.text=t("对后续启动生效","Applies to subsequent boots")})
+            }
+            panel.addView(TextView(this).apply{this.text=t("实际启动取决于设备信任与镜像兼容性。","Booting depends on device trust and image compatibility.")})
+            panel.addView(Button(this).apply{this.text=t("重新检测","Check again");setOnClickListener{lockControls(panel);request("/api/profiles/$id/secure-boot/check","POST",JSONObject(),failed={dialog.dismiss();secureBootSettings(id)}){dialog.dismiss();secureBootSettings(id)}}})
             dialog.show()
         }
     }

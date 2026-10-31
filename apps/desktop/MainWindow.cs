@@ -166,10 +166,17 @@ public class MainWindow : Window {
             var toggle=form.Check(T("安全启动支持","Secure Boot support"),support.Enabled);
             var detail=new TextBlock{Text=Strings.Message(support.Detail),TextWrapping=Avalonia.Media.TextWrapping.Wrap};form.Add(detail);
             var results=form.Text(T("查看检查结果","View check results"),"",true);results.IsReadOnly=true;
+            var methods=new StackPanel{Spacing=6};form.Add(methods);
+            var note=new TextBlock{Text=T("实际启动取决于设备信任与镜像兼容性。","Booting depends on device trust and image compatibility."),TextWrapping=Avalonia.Media.TextWrapping.Wrap};form.Add(note);
+            var recheck=new Button{Content=T("重新检测","Check again")};form.Add(recheck);
             bool updating=false,loading=true;
-            void Render(){updating=true;toggle.IsChecked=support.Enabled;toggle.IsEnabled=!loading&&(support.Enabled||support.State=="passed");detail.Text=loading?T("正在准备或检查…","Preparing or checking…"):Strings.Message(support.Detail);results.Text=string.Join("\n\n",support.Components.Select(c=>$"{c.File}\n{c.Signer}\n{c.Issuer}\nSHA-256: {c.Sha256}\n{c.CertificateSha256}"));updating=false;}
+            void Render(){updating=true;methods.Children.Clear();methods.IsVisible=support.Enabled;recheck.IsEnabled=!loading;
+                if(support.Enabled){methods.Children.Add(new TextBlock{Text=T("启动方式","Boot method")});var choices=support.Modes??["media-native"];foreach(var mode in choices){var label=mode=="signed-ipxe"?T("iPXE shim（使用签名 iPXE 引导）","iPXE shim (signed iPXE)"):T("原生网络启动（使用镜像内组件）","Native network boot (image components)");if(choices.Length>1){var radio=new RadioButton{Content=label,GroupName="secure-boot-method",IsChecked=mode==support.Mode,IsEnabled=!loading};radio.IsCheckedChanged+=async(_,_)=>{if(!updating&&radio.IsChecked==true)await ChangeMode(mode);};methods.Children.Add(radio);}else methods.Children.Add(new TextBlock{Text=label});}methods.Children.Add(new TextBlock{Text=T("对后续启动生效","Applies to subsequent boots")});}
+                toggle.IsChecked=support.Enabled;toggle.IsEnabled=!loading&&(support.Enabled||support.State=="passed");detail.Text=loading?T("正在准备或检查…","Preparing or checking…"):Strings.Message(support.Detail);results.Text=string.Join("\n\n",support.Components.Select(c=>$"{c.File}\n{c.Signer}\n{c.Issuer}\nSHA-256: {c.Sha256}\n{c.CertificateSha256}"));updating=false;}
             async Task Load(){loading=true;Render();try{support=await api.SecureBoot(p.Id);}catch(Exception e){status.Text=Strings.Message(e.Message);}finally{loading=false;Render();}}
             async Task Change(){var enabled=toggle.IsChecked==true;loading=true;Render();try{await api.Send($"/api/profiles/{p.Id}/secure-boot",new{enabled},HttpMethod.Put);await Refresh();}catch(Exception e){status.Text=Strings.Message(e.Message);}finally{await Load();}}
+            async Task ChangeMode(string mode){loading=true;Render();try{await api.Send($"/api/profiles/{p.Id}/secure-boot",new{enabled=true,mode},HttpMethod.Put);await Refresh();}catch(Exception e){status.Text=Strings.Message(e.Message);}finally{await Load();}}
+            recheck.Click+=async(_,_)=>{loading=true;Render();try{await api.Send($"/api/profiles/{p.Id}/secure-boot/check",new{});}catch(Exception e){status.Text=Strings.Message(e.Message);}finally{await Load();}};
             Render();form.Opened+=async(_,_)=>await Load();toggle.IsCheckedChanged+=async(_,_)=>{if(!updating)await Change();};
         }
         Field("名称",p.Name);Field("架构",p.Architecture);Field("类型",p.Kind);Field("目录",p.Root);Field("镜像文件",p.Media);

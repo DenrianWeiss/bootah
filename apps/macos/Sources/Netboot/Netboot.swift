@@ -52,7 +52,10 @@ struct SystemImage: Codable, Identifiable, Hashable {
         }
     }
 }
+struct SecureBootChange:Encodable {var enabled:Bool;var mode:String}
 struct SecureBootSupport:Codable,Hashable {
+    var mode:String?
+    var modes:[String]?
     var eligible:Bool
     var enabled:Bool
     var state:String
@@ -715,6 +718,21 @@ struct SecureBootSettings:View {
                         busy=true
                         Task {_ = await server.send("api/profiles/\(image.id)/secure-boot",["enabled":enabled],method:"PUT");await update()}
                     })).disabled(busy || (!support.enabled && support.state != "passed"))
+                    if support.enabled {
+                        if (support.modes ?? []).count > 1 {
+                            Picker(L10n.t("启动方式","Boot method"),selection:Binding(get:{support.mode ?? "media-native"},set:{mode in
+                                busy=true
+                                Task {_ = await server.send("api/profiles/\(image.id)/secure-boot",SecureBootChange(enabled:true,mode:mode),method:"PUT");await update()}
+                            })) {
+                                ForEach(support.modes ?? [],id:\.self) {mode in Text(mode == "media-native" ? L10n.t("原生网络启动（使用镜像内组件）","Native network boot (image components)") : L10n.t("iPXE shim（使用签名 iPXE 引导）","iPXE shim (signed iPXE)")).tag(mode)}
+                            }.pickerStyle(.radioGroup).disabled(busy)
+                        } else {
+                            LabeledContent(L10n.t("启动方式","Boot method"),value:support.mode == "signed-ipxe" ? "iPXE shim" : L10n.t("原生网络启动","Native network boot"))
+                        }
+                        Text(L10n.t("对后续启动生效","Applies to subsequent boots")).font(.caption)
+                    }
+                    Text(L10n.t("实际启动取决于设备信任与镜像兼容性。","Booting depends on device trust and image compatibility.")).font(.caption)
+                    Button(L10n.t("重新检测","Check again")) {busy=true;Task {_ = await server.send("api/profiles/\(image.id)/secure-boot/check",[String:String]());await update()}}.disabled(busy)
                     if busy {ProgressView(L10n.t("正在准备或检查…","Preparing or checking…"))}
                     if !busy {Text(support.detail.isEmpty ? L10n.t("尚未检查","Not checked") : L10n.message(support.detail)).font(.caption).textSelection(.enabled)}
                     DisclosureGroup(L10n.t("查看检查结果","View check results")) {

@@ -2,6 +2,17 @@
   "locales": ["zh-CN", "en"],
   "fallbackLocale": "en",
   "terms": {
+
+    "Boot method": {"zh-CN": "启动方式", "en": "Boot method"},
+    "Native network boot": {"zh-CN": "原生网络启动", "en": "Native network boot"},
+    "iPXE shim": {"zh-CN": "iPXE shim", "en": "iPXE shim"},
+    "Applies to subsequent boots": {"zh-CN": "对后续启动生效", "en": "Applies to subsequent boots"},
+    "Enable Secure Boot support first": {"zh-CN": "请先开启安全启动支持", "en": "Enable Secure Boot support first"},
+    "Secure Boot mode unavailable for this image": {"zh-CN": "此镜像不支持所选安全启动方式", "en": "Secure Boot mode unavailable for this image"},
+    "Missing signed iPXE asset": {"zh-CN": "缺少签名 iPXE 组件", "en": "Missing signed iPXE asset"},
+    "Signed iPXE asset verification failed": {"zh-CN": "签名 iPXE 组件校验失败", "en": "Signed iPXE asset verification failed"},
+    "←/→ Pages   ↑/↓ Select   v Details   t Toggle Secure Boot   m Boot method   c Check again   i Import ISO   d Default images   q Quit": {"zh-CN": "←/→ 页面   ↑/↓ 选择   v 详情   t 安全启动   m 启动方式   c 重新检测   i 导入镜像   d 默认镜像   q 退出", "en": "←/→ Pages   ↑/↓ Select   v Details   t Toggle Secure Boot   m Boot method   c Check again   i Import ISO   d Default images   q Quit"},
+
     "←/→ Pages   ↑/↓ Select   v Details   t Toggle Secure Boot   i Import ISO   d Default images   q Quit": {"zh-CN": "←/→ 页面   ↑/↓ 选择   v 详情   t 切换安全启动   i 导入 ISO   d 默认镜像   q 退出", "en": "←/→ Pages   ↑/↓ Select   v Details   t Toggle Secure Boot   i Import ISO   d Default images   q Quit"},
     "←/→ Pages   ↑/↓ Select   v Details   c Check Secure Boot   t Toggle Secure Boot   i Import ISO   d Default images   q Quit": {"zh-CN": "←/→ 页面   ↑/↓ 选择   v 详情   c 检查安全启动   t 切换安全启动   i 导入 ISO   d 默认镜像   q 退出", "en": "←/→ Pages   ↑/↓ Select   v Details   c Check Secure Boot   t Toggle Secure Boot   i Import ISO   d Default images   q Quit"},
     "Disabled": {"zh-CN": "已关闭", "en": "Disabled"},
@@ -546,7 +557,8 @@
     "Use the image Secure Boot support setting after import": {"zh-CN": "请在导入后使用镜像的安全启动支持设置", "en": "Use the image Secure Boot support setting after import"},
     "Remove incompatible architecture defaults before switching": {"zh-CN": "请先取消不兼容架构的默认镜像分配", "en": "Remove incompatible architecture defaults before switching"}
   },
-  "messageKeys": ["Original ISO adapter retained; firmware trust and complete boot still require validation.", "Turn off Secure Boot support before changing compatibility mode", "Remove incompatible architecture defaults before switching", "ISO must contain one matching signed network GRUB package", "Use the image Secure Boot support setting after import", "Casper NFS requires NFS and portmapper on port 111.", "Cannot prepare boot services; selection unchanged", "Secure Boot support is unavailable for this media", "Image changed; detect EFI certificate again", "Reimport this legacy image before switching", "Turn off Secure Boot support before editing", "Windows EFI has no matching signature table", "ISO network GRUB lacks matching signature", "Secure Boot support requires x64 or ARM64", "Native Windows boot needs wimlib-imagex", "Secure Boot check expired; check again", "Missing matching Microsoft EFI loader", "Use the Secure Boot support setting", "WinPE helper architecture mismatch", "Missing matching EFI certificate", "Missing signed ISO component", "Native Windows boot requires", "Secure Boot support enabled.", "Cannot read EFI certificate", "EFI contains no certificate", "Missing native WinPE helper", "No matching EFI certificate", "Image changed during check", "Secure Boot check required", "EFI certificate detected", "WIM has no boot index", "Unsupported image"],
+  "messageKeys": [
+    "Secure Boot mode unavailable for this image", "Missing signed iPXE asset", "Signed iPXE asset verification failed", "Original ISO adapter retained; firmware trust and complete boot still require validation.", "Turn off Secure Boot support before changing compatibility mode", "Remove incompatible architecture defaults before switching", "ISO must contain one matching signed network GRUB package", "Use the image Secure Boot support setting after import", "Casper NFS requires NFS and portmapper on port 111.", "Cannot prepare boot services; selection unchanged", "Secure Boot support is unavailable for this media", "Image changed; detect EFI certificate again", "Reimport this legacy image before switching", "Turn off Secure Boot support before editing", "Windows EFI has no matching signature table", "ISO network GRUB lacks matching signature", "Secure Boot support requires x64 or ARM64", "Native Windows boot needs wimlib-imagex", "Secure Boot check expired; check again", "Missing matching Microsoft EFI loader", "Use the Secure Boot support setting", "WinPE helper architecture mismatch", "Missing matching EFI certificate", "Missing signed ISO component", "Native Windows boot requires", "Secure Boot support enabled.", "Cannot read EFI certificate", "EFI contains no certificate", "Missing native WinPE helper", "No matching EFI certificate", "Image changed during check", "Secure Boot check required", "EFI certificate detected", "WIM has no boot index", "Unsupported image"],
   "legacyMessages": {
     "Image changed; detect EFI certificate again / 镜像已变化，请重新检测 EFI 证书": "Image changed; detect EFI certificate again",
     "Reimport this legacy image before switching / 此旧版镜像需重新导入后才能切换": "Reimport this legacy image before switching",

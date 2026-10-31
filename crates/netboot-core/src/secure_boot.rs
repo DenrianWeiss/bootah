@@ -9,6 +9,8 @@ use std::{collections::BTreeMap, fs, io::Read, path::Path};
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Support {
+    pub mode: String,
+    pub modes: Vec<String>,
     pub eligible: bool,
     pub enabled: bool,
     pub state: String,
@@ -56,29 +58,34 @@ impl Route {
         p.boot_evidence = self.boot_evidence.clone();
     }
 }
-pub fn eligible(p: &Profile) -> bool {
-    !p.media.is_empty()
-        && matches!(p.architecture.as_str(), "x64" | "arm64")
-        && (matches!(p.kind.as_str(), "windows" | "windows-pe-iso")
-            || p.kind == "linux"
-                && matches!(
-                    p.system_id.as_str(),
-                    "ubuntu"
-                        | "debian"
-                        | "fedora"
-                        | "redhat"
-                        | "centos"
-                        | "rockylinux"
-                        | "almalinux"
-                        | "opensuse"
-                        | "suse"
-                        | "kylin"
-                ))
+pub const NATIVE: &str = "media-native";
+pub const SHIM: &str = "signed-ipxe";
+pub fn enabled(p: &Profile) -> bool {
+    crate::native_uefi::enabled(p) || crate::signed_ipxe::enabled(p)
 }
+pub fn modes(p: &Profile) -> Vec<String> {
+    if p.media.is_empty() || !matches!(p.architecture.as_str(), "x64" | "arm64") { return vec![]; }
+    if matches!(p.kind.as_str(), "windows" | "windows-pe-iso") || p.kind == "linux" && p.system_id == "kylin" {
+        return vec![NATIVE.into()];
+    }
+    if p.kind == "linux" {
+        if matches!(p.system_id.as_str(), "ubuntu" | "debian" | "fedora" | "redhat" | "centos" | "rockylinux" | "almalinux" | "opensuse" | "suse") {
+            return vec![NATIVE.into(), SHIM.into()];
+        }
+        return vec![SHIM.into()];
+    }
+    if matches!(p.kind.as_str(), "bsd" | "freebsd" | "netbsd" | "openbsd") { return vec![SHIM.into()]; }
+    vec![]
+}
+pub fn eligible(p: &Profile) -> bool { !modes(p).is_empty() }
 pub fn support(p: &Profile) -> Support {
     let mut s = p.secure_boot.clone().unwrap_or_default();
     s.eligible = eligible(p);
-    s.enabled = crate::native_uefi::enabled(p);
+    s.enabled = enabled(p);
+    s.modes = modes(p);
+    if crate::native_uefi::enabled(p) { s.mode = NATIVE.into(); }
+    else if crate::signed_ipxe::enabled(p) { s.mode = SHIM.into(); }
+    else if !s.modes.contains(&s.mode) { s.mode = s.modes.first().cloned().unwrap_or_default(); }
     if s.state.is_empty() {
         s.state = "unchecked".into();
     }
@@ -90,7 +97,7 @@ pub fn support(p: &Profile) -> Support {
 }
 fn normal(p: &Profile) -> Result<Profile, String> {
     let mut original = p.clone();
-    if crate::native_uefi::enabled(p) {
+    if enabled(p) {
         if let Some(route) = p.secure_boot.as_ref().and_then(|s| s.normal.as_ref()) {
             route.restore(&mut original);
         } else {
@@ -162,6 +169,7 @@ pub fn cached(p: &Profile) -> Option<Support> {
     if !s.eligible {
         return Some(s);
     }
+    if s.state == "unsupported" { return None; }
     if !matches!(s.state.as_str(), "passed" | "absent" | "failed") || s.fingerprint.is_empty() {
         return None;
     }
@@ -249,7 +257,11 @@ pub fn check(p: &Profile, settings: &Settings) -> Result<Support, String> {
     s.checked_at = crate::model::now();
     Ok(s)
 }
+#[cfg(test)]
 pub fn switch(p: &Profile, settings: &Settings, enabled: bool) -> Result<Profile, String> {
+    switch_mode(p, settings, enabled, None)
+}
+pub fn switch_mode(p: &Profile, settings: &Settings, enabled: bool, mode: Option<&str>) -> Result<Profile, String> {
     if !enabled {
         let mut changed = normal(p)?;
         let mut s = support(p);
@@ -264,8 +276,15 @@ pub fn switch(p: &Profile, settings: &Settings, enabled: bool) -> Result<Profile
     validate_current(p)?;
     let mut changed = normal(p)?;
     let route = Route::capture(&changed);
-    crate::native_uefi::prepare(&mut changed, settings)?;
     let mut s = support(p);
+    let selected = mode.unwrap_or(&s.mode).to_string();
+    if !s.modes.contains(&selected) { return Err("Secure Boot mode unavailable for this image".into()); }
+    match selected.as_str() {
+        NATIVE => crate::native_uefi::prepare(&mut changed, settings)?,
+        SHIM => crate::signed_ipxe::prepare(&mut changed)?,
+        _ => return Err("Secure Boot mode unavailable for this image".into()),
+    }
+    s.mode = selected;
     s.enabled = true;
     s.normal = Some(route);
     s.fingerprint = fingerprint(&changed)?;
@@ -276,6 +295,27 @@ pub fn switch(p: &Profile, settings: &Settings, enabled: bool) -> Result<Profile
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn modes_follow_distribution_policy() {
+        let mut p: Profile=serde_json::from_value(serde_json::json!({"id":"p","name":"p","root":"/tmp","kind":"linux","system_id":"ubuntu","architecture":"x64","media":"test.iso"})).unwrap();
+        assert_eq!(modes(&p),[NATIVE,SHIM]);
+        p.system_id="kylin".into();assert_eq!(modes(&p),[NATIVE]);
+        p.system_id="uos".into();assert_eq!(modes(&p),[SHIM]);
+        p.kind="bsd".into();assert_eq!(modes(&p),[SHIM]);
+        p.kind="windows".into();assert_eq!(modes(&p),[NATIVE]);
+        p.architecture="x86".into();assert!(modes(&p).is_empty());
+    }
+    #[test]
+    fn shim_mode_restores_original_route_and_blocks_unsigned_state() {
+        let mut p:Profile=serde_json::from_value(serde_json::json!({"id":"p","name":"p","root":"/tmp","kind":"linux","system_id":"uos","architecture":"x64","media":"test.iso","kernel":"vmlinuz","boot_files":{"x64-efi":"ipxe-x64.efi"}})).unwrap();
+        let route=Route::capture(&p);
+        p.boot_files.insert("x64-efi".into(),"bootah-ipxe-test/ipxe-shim.efi".into());
+        p.secure_boot=Some(Support{normal:Some(route),..Default::default()});
+        assert!(enabled(&p));assert_eq!(support(&p).mode,SHIM);
+        assert!(switch_mode(&p,&Settings::default(),true,Some(SHIM)).is_err());
+        let restored=switch(&p,&Settings::default(),false).unwrap();
+        assert!(!enabled(&restored));assert_eq!(restored.boot_files["x64-efi"],"ipxe-x64.efi");
+    }
     #[test]
     fn unsigned_component_cannot_pass() {
         assert!(certificate(b"MZ unsigned", 0x8664, "test.efi").is_err());

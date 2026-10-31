@@ -97,6 +97,8 @@ pub fn detect(source: &Path, profiles: &[Profile]) -> (String, String) {
             ("kylin", "kylin", "Kylin"),
             ("uniontech", "uos", "UOS"),
             ("uos server", "uos", "UOS"),
+            ("uos-desktop", "uos", "UOS"),
+            ("uos desktop", "uos", "UOS"),
             ("aosc", "aosc", "AOSC OS"),
             ("netbsd", "netbsd", "NetBSD"),
             ("freebsd", "freebsd", "FreeBSD"),

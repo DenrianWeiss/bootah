@@ -72,7 +72,7 @@ fn pxe_auto(profile: &Profile, chinese: bool) -> ManualBoot {
         .next()
         .cloned()
         .unwrap_or_default();
-    let verified = !crate::native_uefi::enabled(profile) && matches!(profile.architecture.as_str(), "x64" | "arm64");
+    let verified = !crate::secure_boot::enabled(profile) && matches!(profile.architecture.as_str(), "x64" | "arm64");
     manual(
         "pxe",
         "UEFI/BIOS PXE",
@@ -412,7 +412,7 @@ fn openfirmware(profile: &Profile, chinese: bool) -> ManualBoot {
         ],
     )
 }
-fn http_root(settings: &Settings, profile: &Profile) -> String {
+pub(crate) fn http_root(settings: &Settings, profile: &Profile) -> String {
     format!(
         "http://{}:{}/boot/{}",
         settings.server_ip, settings.http_port, profile.id
@@ -446,6 +446,7 @@ pub(crate) fn render_arguments(profile: &Profile, settings: &Settings) -> String
         )
 }
 pub fn ipxe(profile: &Profile, settings: &Settings, auto: Option<&AutoConfig>) -> String {
+    if crate::signed_ipxe::enabled(profile) { return crate::signed_ipxe::script(profile, settings, auto); }
     let base = if settings.boot_transport == "tftp" {
         format!("tftp://{}", settings.server_ip)
     } else {
@@ -638,6 +639,9 @@ pub fn virtual_file(
     if profile.kind == "bsd" && name == "etc/boot.conf" && profile.kernel.ends_with("bsd.rd") {
         let flags = bsd_flags(&profile.arguments, "acds")?;
         return Some(format!("boot {}{}\n", profile.kernel, flags).into_bytes());
+    }
+    if crate::signed_ipxe::is_script(profile, name) {
+        return Some(crate::signed_ipxe::script(profile, settings, auto).into_bytes());
     }
     if name == "boot.ipxe" {
         return Some(ipxe(profile, settings, auto).into_bytes());
