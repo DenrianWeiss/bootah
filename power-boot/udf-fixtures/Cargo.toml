@@ -1,0 +1,11 @@
+[package]
+name = "bootah-udf-fixtures"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+libmkiso = "=0.1.5"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

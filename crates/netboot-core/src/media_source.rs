@@ -76,11 +76,13 @@ fn read_bytes(file: &mut File, offset: u64, size: usize, length: u64) -> Result<
     file.read_exact(&mut b).map_err(err)?;
     Ok(b)
 }
-fn rock_ridge_name(file: &mut File, data: &[u8], length: u64) -> Result<(String, bool), String> {
+fn rock_ridge_name(file: &mut File, data: &[u8], length: u64) -> Result<(String, bool, Option<u32>, bool), String> {
     let mut areas = vec![(data.to_vec(), 0)];
     let mut seen = HashSet::new();
     let mut name = String::new();
     let mut link = false;
+    let mut child = None;
+    let mut relocated = false;
     let mut continued = false;
     while let Some((area, mut pos)) = areas.pop() {
         while pos + 4 <= area.len() {
@@ -101,6 +103,8 @@ fn rock_ridge_name(file: &mut File, data: &[u8], length: u64) -> Result<(String,
                     }
                 }
                 b"SL" => link = true,
+                b"CL" if len == 12 && entry[3] == 1 => child = Some(u32::from_le_bytes(entry[4..8].try_into().unwrap())),
+                b"RE" if len == 4 && entry[3] == 1 => relocated = true,
                 b"ST" => break,
                 b"CE" if len >= 28 => {
                     let block = u32::from_le_bytes(entry[4..8].try_into().unwrap()) as u64;
@@ -126,7 +130,7 @@ fn rock_ridge_name(file: &mut File, data: &[u8], length: u64) -> Result<(String,
     if continued {
         return Err("Incomplete Rock Ridge filename".into());
     }
-    Ok((name, link))
+    Ok((name, link, child, relocated))
 }
 impl Image {
     pub fn open(source: &Path) -> Result<Self, String> {
@@ -274,19 +278,26 @@ impl Image {
                     name = base.trim_end_matches('.').into();
                 }
             }
+            let mut child = None;
             if !joliet {
                 let extra = 33 + ns + usize::from(ns.is_multiple_of(2));
-                let (nm, link) = rock_ridge_name(
+                let (nm, link, child_location, relocated) = rock_ridge_name(
                     file,
                     r.get(extra + susp_skip..).unwrap_or_default(),
                     self.length,
                 )?;
-                if link {
+                if link || relocated {
                     continue;
                 }
+                child = child_location;
                 if !nm.is_empty() {
                     name = nm;
                 }
+            }
+            // POSIX media may contain colon names (FreeBSD C++ manual pages).
+            // They cannot be exported safely on every supported host filesystem.
+            if name.contains(':') && !name.contains(['/', '\\']) {
+                continue;
             }
             let path = if parent.is_empty() {
                 name
@@ -296,16 +307,24 @@ impl Image {
             if !valid(&path) {
                 return Err("Unsafe ISO name".into());
             }
-            let start =
+            let mut start =
                 (u32::from_le_bytes(r[2..6].try_into().unwrap()) as u64 + u64::from(r[1])) * 2048;
-            let bytes = u32::from_le_bytes(r[10..14].try_into().unwrap()) as u64;
-            let is_dir = r[25] & 2 != 0;
+            let mut bytes = u32::from_le_bytes(r[10..14].try_into().unwrap()) as u64;
+            let is_dir = r[25] & 2 != 0 || child.is_some();
+            if let Some(sector) = child {
+                start = u64::from(sector) * 2048;
+                let directory = read_bytes(file, start, 34, self.length)?;
+                if directory[0] < 34 || directory[25] & 2 == 0 || directory[32..34] != [1, 0] {
+                    return Err("Invalid Rock Ridge relocated directory".into());
+                }
+                bytes = u32::from_le_bytes(directory[10..14].try_into().unwrap()) as u64;
+            }
             if start.checked_add(bytes).is_none_or(|n| n > self.length) {
                 return Err("ISO extent outside image".into());
             }
             if let Some(e) = self.entries.get_mut(&path) {
                 if is_dir || e.is_dir || !multi.contains(&path) {
-                    return Err("Duplicate ISO path".into());
+                    return Err(format!("Duplicate ISO path: {path}"));
                 }
                 e.size = e.size.checked_add(bytes).ok_or("ISO size overflow")?;
                 e.extents.push((start, bytes));
@@ -714,6 +733,9 @@ pub fn list(root: &Path) -> Result<BTreeMap<String, Entry>, String> {
     let image = registered(root)?;
     image.check()?;
     let mut entries = image.entries.clone();
+    entries.insert("media.iso".into(), Entry {
+        size: image.length, is_dir: false, mode: 0o100444, link: None, link_root: None, extents: vec![],
+    });
     fn local(
         root: &Path,
         path: &Path,
@@ -997,6 +1019,41 @@ mod optical_tests {
         r.extend_from_slice(extra);
         r[0] = r.len() as u8;
         r
+    }
+    #[test]
+    fn follows_rock_ridge_child_links_and_skips_relocated_duplicates() {
+        let path = std::env::temp_dir().join(format!("bootah-relocated-{}.iso", uuid::Uuid::new_v4()));
+        let mut bytes = vec![0; 32 * 2048];
+        bytes[16 * 2048] = 1;
+        bytes[16 * 2048 + 1..16 * 2048 + 6].copy_from_slice(b"CD001");
+        bytes[16 * 2048 + 6] = 1;
+        let dot = record(&[0], 20, 2048, 2, &[]);
+        bytes[16 * 2048 + 156..16 * 2048 + 190].copy_from_slice(&dot[..34]);
+        bytes[17 * 2048] = 255;
+        bytes[17 * 2048 + 1..17 * 2048 + 6].copy_from_slice(b"CD001");
+        let mut root = record(&[0], 20, 2048, 2, b"SP\x07\x01\xbe\xef\x00");
+        root.extend(record(b".rr_moved", 21, 2048, 2, &[]));
+        let mut moved = record(&[0], 21, 2048, 2, &[]);
+        for (name, sector, value) in [(b"alpha".as_slice(), 22u32, b'A'), (b"beta".as_slice(), 23u32, b'B')] {
+            let mut link = b"CL\x0c\x01".to_vec();
+            link.extend(sector.to_le_bytes());
+            link.extend(sector.to_be_bytes());
+            root.extend(record(name, 0, 0, 0, &link));
+            moved.extend(record(b"detail", sector, 2048, 2, b"RE\x04\x01"));
+            let mut directory = record(&[0], sector, 2048, 2, &[]);
+            directory.extend(record(b"file", sector + 4, 1, 0, &[]));
+            let at = sector as usize * 2048;
+            bytes[at..at + directory.len()].copy_from_slice(&directory);
+            bytes[(sector as usize + 4) * 2048] = value;
+        }
+        bytes[20 * 2048..20 * 2048 + root.len()].copy_from_slice(&root);
+        bytes[21 * 2048..21 * 2048 + moved.len()].copy_from_slice(&moved);
+        fs::write(&path, bytes).unwrap();
+        let image = Image::open(&path).unwrap();
+        assert_eq!(image.read("alpha/file", 1).unwrap(), b"A");
+        assert_eq!(image.read("beta/file", 1).unwrap(), b"B");
+        assert!(!image.entries.contains_key(".rr_moved/detail"));
+        fs::remove_file(path).unwrap();
     }
     fn medium(joliet: bool, skip: usize) -> (PathBuf, String, String) {
         let path =

@@ -1,4 +1,4 @@
-//! Read-only NFSv3/TCP view of an imported medium. Wire protocol is provided by
+//! Read-only NFSv3 view of an imported medium, shared by TCP and UDP. Provided by
 //! nfsserve (BSD-3-Clause); no host mounts or unpacked installation tree needed.
 use async_trait::async_trait;
 use nfsserve::{
@@ -12,6 +12,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[derive(Clone)]
 struct Node {
     path: String,
     directory: bool,
@@ -19,10 +20,12 @@ struct Node {
     mode: u16,
     link: Option<String>,
 }
+#[derive(Clone)]
 pub struct MediaFs {
     root: PathBuf,
     nodes: BTreeMap<u64, Node>,
     paths: BTreeMap<String, u64>,
+    max_read: u32,
 }
 impl MediaFs {
     pub fn total_bytes(&self) -> u64 {
@@ -49,6 +52,7 @@ impl MediaFs {
             root: root.into(),
             nodes: BTreeMap::new(),
             paths: BTreeMap::new(),
+            max_read: 1024 * 1024,
         };
         for (index, (path, (directory, size, mode, link))) in paths.into_iter().enumerate() {
             let id = index as u64 + 1;
@@ -149,12 +153,22 @@ impl NFSFileSystem for MediaFs {
         resource
             .seek(SeekFrom::Start(offset))
             .map_err(|_| nfsstat3::NFS3ERR_IO)?;
-        let length = (n.size - offset).min(count as u64).min(1024 * 1024) as usize;
+        let length = (n.size - offset).min(count as u64).min(u64::from(self.max_read)) as usize;
         let mut data = vec![0; length];
         resource
             .read_exact(&mut data)
             .map_err(|_| nfsstat3::NFS3ERR_IO)?;
         Ok((data, offset + length as u64 >= n.size))
+    }
+    async fn fsinfo(&self, id: u64) -> Result<fsinfo3, nfsstat3> {
+        Ok(fsinfo3 {
+            obj_attributes: post_op_attr::attributes(self.attr(id)?),
+            rtmax: self.max_read, rtpref: self.max_read.min(1024 * 124), rtmult: 512,
+            wtmax: self.max_read, wtpref: self.max_read, wtmult: 512,
+            dtpref: self.max_read, maxfilesize: 128 * 1024 * 1024 * 1024,
+            time_delta: nfstime3 { seconds: 0, nseconds: 1_000_000 },
+            properties: FSF_SYMLINK | FSF_HOMOGENEOUS,
+        })
     }
     async fn readdir(
         &self,
@@ -184,7 +198,11 @@ impl NFSFileSystem for MediaFs {
         };
         let end = (start + max_entries.min(4096)).min(children.len());
         let mut entries = Vec::new();
+        let mut budget = 0;
         for (id, n) in &children[start..end] {
+            let cost = n.path.len() + 256;
+            if !entries.is_empty() && budget + cost > self.max_read as usize { break; }
+            budget += cost;
             entries.push(DirEntry {
                 fileid: **id,
                 name: Path::new(&n.path)
@@ -196,10 +214,8 @@ impl NFSFileSystem for MediaFs {
                 attr: self.attr(**id)?,
             });
         }
-        Ok(ReadDirResult {
-            entries,
-            end: end == children.len(),
-        })
+        let complete = start + entries.len() == children.len();
+        Ok(ReadDirResult { entries, end: complete })
     }
     async fn readlink(&self, id: u64) -> Result<nfspath3, nfsstat3> {
         let n = self.node(id)?;
@@ -307,6 +323,7 @@ fn portmap_reply_ports(
                     && (program == 100003 || program == 100005)
                     && version == 3
                     && protocol == 6)
+                    || ((program == 100003 || program == 100005) && version == 3 && protocol == 17)
                     || (program == 100003 && version == 2 && protocol == 17)
                     || (program == 100005 && version == 1 && protocol == 17)
                 {
@@ -333,7 +350,7 @@ fn portmap_reply_ports(
                     push(&mut out, v)
                 }
             }
-            for (program, version) in [(100003, 2), (100005, 1)] {
+            for (program, version) in [(100003, 2), (100005, 1), (100003, 3), (100005, 3)] {
                 for v in [1, program, version, 17, port as u32] {
                     push(&mut out, v)
                 }
@@ -567,6 +584,69 @@ pub async fn start(
     Ok(handles)
 }
 
+// Reuse the same NFSv3 implementation for native loaders that speak UDP.
+pub struct DatagramExport {
+    stream: tokio::net::TcpStream,
+    task: tokio::task::JoinHandle<()>,
+    xid: u32,
+    fs: MediaFs,
+    name: String,
+}
+impl Drop for DatagramExport {
+    fn drop(&mut self) { self.task.abort(); }
+}
+impl DatagramExport {
+    pub async fn new(root: &Path, name: &str) -> Result<Self, String> {
+        let mut fs = MediaFs::new(root)?;
+        fs.max_read = 32768;
+        let mut listener = NFSTcpListener::bind("127.0.0.1:0", fs.clone()).await.map_err(|e| e.to_string())?;
+        listener.with_export_name(name);
+        let port = listener.get_listen_port();
+        let stream = tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).await.map_err(|e| e.to_string())?;
+        stream.set_nodelay(true).map_err(|e| e.to_string())?;
+        let task = tokio::spawn(async move { let _ = listener.handle_forever().await; });
+        Ok(Self { stream, task, xid: 0, fs, name: name.into() })
+    }
+    pub async fn request(&mut self, packet: &[u8]) -> Option<Vec<u8>> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        if packet.len() < 24 || packet.len() > 4096 { return None; }
+        // Bound nfsserve's transaction history; otherwise its per-call scan grows
+        // quadratically during large ISO reads. The immutable file IDs stay stable.
+        if self.xid != 0 && self.xid.is_multiple_of(4096) {
+            let mut listener = NFSTcpListener::bind("127.0.0.1:0", self.fs.clone()).await.ok()?;
+            listener.with_export_name(&self.name);
+            let stream = tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, listener.get_listen_port())).await.ok()?;
+            stream.set_nodelay(true).ok()?;
+            let task = tokio::spawn(async move { let _ = listener.handle_forever().await; });
+            self.task.abort();
+            self.task = task;
+            self.stream = stream;
+        }
+        let mut record = packet.to_vec();
+        // A retried read is safe; give each relay call its own transaction identity.
+        self.xid = self.xid.wrapping_add(1);
+        record[..4].copy_from_slice(&self.xid.to_be_bytes());
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            self.stream.write_u32(0x80000000 | record.len() as u32).await?;
+            self.stream.write_all(&record).await?;
+            let mut out = Vec::new();
+            loop {
+                let marker = self.stream.read_u32().await?;
+                let length = (marker & 0x7fffffff) as usize;
+                if length + out.len() > 65507 { return Err(std::io::Error::other("NFS UDP response exceeds datagram limit")); }
+                let start = out.len();
+                out.resize(start + length, 0);
+                self.stream.read_exact(&mut out[start..]).await?;
+                if marker & 0x80000000 != 0 { break; }
+            }
+            if out.len() < 4 || out[..4] != self.xid.to_be_bytes() { return Err(std::io::Error::other("NFS transaction mismatch")); }
+            out[..4].copy_from_slice(&packet[..4]);
+            Ok(out)
+        }).await;
+        result.ok()?.ok()
+    }
+}
+
 /// Only profiles with a known network-root adapter may export their media tree.
 pub fn eligible(profile: &crate::model::Profile) -> bool {
     if profile.kind == "linux" {
@@ -579,6 +659,7 @@ pub fn eligible(profile: &crate::model::Profile) -> bool {
                 .split_whitespace()
                 .any(|s| s == "netboot=nfs");
     }
+    if crate::freebsd::network_root(profile) { return true; }
     if profile.kind == "solaris" {
         return true;
     }
@@ -646,4 +727,28 @@ pub fn configured_port_for(config: &crate::model::Config) -> Result<Option<u16>,
         return Err("Casper NFS requires NFS and portmapper on port 111.".into());
     }
     Ok(port)
+}
+
+#[cfg(test)]
+mod datagram_tests {
+    use super::*;
+    #[tokio::test]
+    async fn datagram_limits_allow_complete_reads_using_short_responses() {
+        let root = std::env::temp_dir().join(format!("bootah-nfs-datagram-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let data = vec![0x5a; 65536];
+        std::fs::write(root.join("data"), &data).unwrap();
+        let fs = MediaFs {
+            root: root.clone(), paths: BTreeMap::from([("data".into(), 1)]), max_read: 32768,
+            nodes: BTreeMap::from([(1, Node { path: "data".into(), directory: false, size: data.len() as u64, mode: 0o100444, link: None })]),
+        };
+        assert_eq!(fs.fsinfo(1).await.unwrap().rtmax, 32768);
+        let (first, eof) = fs.read(1, 0, 1024 * 1024).await.unwrap();
+        assert!(!eof);
+        assert_eq!(first.len(), 32768);
+        let (last, eof) = fs.read(1, first.len() as u64, 1024 * 1024).await.unwrap();
+        assert!(eof);
+        assert_eq!([first, last].concat(), data);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

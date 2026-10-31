@@ -288,10 +288,11 @@ pub fn reply(state: &Shared, req: &Request<'_>, boot_port: bool) -> Option<Reply
         let _ = store.save();
         return None;
     }
+    let firmware = selected.map(architecture).unwrap_or(&store.config.devices[idx].architecture).to_owned();
     let file = profile
         .as_ref()
         .map(|p| {
-            if req.vendor.starts_with("NetBSD:i386:") && p.kind == "bsd" {
+            if (req.vendor.starts_with("NetBSD:i386:") || req.vendor.starts_with("NetBSD:amd64:")) && p.kind == "bsd" {
                 let raw = req.option(67).unwrap_or(&req.bytes[108..236]);
                 let requested =
                     std::str::from_utf8(raw.split(|b| *b == 0).next().unwrap_or_default())
@@ -317,7 +318,7 @@ pub fn reply(state: &Shared, req: &Request<'_>, boot_port: bool) -> Option<Reply
                 )
             } else if req.vendor.starts_with("HTTPClient") {
                 p.boot_files
-                    .get(architecture(selected.unwrap_or(65535)))
+                    .get(&firmware)
                     .map(|f| {
                         format!(
                             "http://{}:{}/boot/{}/{}",
@@ -326,7 +327,7 @@ pub fn reply(state: &Shared, req: &Request<'_>, boot_port: bool) -> Option<Reply
                     })
                     .unwrap_or_default()
             } else {
-                crate::boot::pxe_loader(p, architecture(selected.unwrap_or(65535))).to_owned()
+                crate::boot::pxe_loader(p, &firmware).to_owned()
             }
         })
         .unwrap_or_default();
@@ -423,6 +424,11 @@ pub fn reply(state: &Shared, req: &Request<'_>, boot_port: bool) -> Option<Reply
         if !proxy && !boot_service {
             if matches!(req.message, 1 | 3) {
                 add(&mut out, 51, &3600u32.to_be_bytes());
+            }
+            if let Some(p) = &profile
+                && crate::freebsd::network_root(p)
+            {
+                add(&mut out, 17, format!("{}:/{}", settings.server_ip, p.id).as_bytes());
             }
             if let Some(p) = &profile
                 && p.kind == "bsd"

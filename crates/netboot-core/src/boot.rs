@@ -392,22 +392,21 @@ fn palo(profile: &Profile, chinese: bool) -> ManualBoot {
     manual("palo", "PA-RISC PALO", "documented", "boot lan", notes)
 }
 fn openfirmware(profile: &Profile, chinese: bool) -> ManualBoot {
-    let _ = profile;
+    let of = profile.boot_files.contains_key("powerpc-of");
+    let opal = profile.boot_files.contains_key("power-opal");
     manual(
-        "openfirmware",
-        "Open Firmware / SLOF",
-        "unavailable",
+        if opal && !of { "petitboot" } else { "openfirmware" },
+        if opal && !of { "PowerNV / Petitboot" } else { "Open Firmware / SLOF / Petitboot" },
+        if of || opal { "documented" } else { "unavailable" },
         "",
         vec![
-            note(
-                chinese,
-                "Select the network device in the SLOF firmware boot menu.",
-                "Select the network device from the SLOF firmware boot menu.",
+            crate::i18n::message(
+                "Select the network device in SLOF, or the discovered network installation entry in Petitboot. Available firmware types are listed in this image's boot files.",
+                if chinese { "zh-CN" } else { "en" }, "en",
             ),
-            note(
-                chinese,
-                "Manual Open Firmware commands depend on the device aliases provided by the firmware.",
-                "Manual Open Firmware commands depend on the device aliases provided by the firmware.",
+            crate::i18n::message(
+                "Manual Open Firmware commands depend on the device aliases provided by the firmware. Firmware types are not interchangeable.",
+                if chinese { "zh-CN" } else { "en" }, "en",
             ),
         ],
     )
@@ -531,13 +530,18 @@ pub fn ipxe(profile: &Profile, settings: &Settings, auto: Option<&AutoConfig>) -
 }
 pub fn pxe(profile: &Profile, settings: &Settings, auto: Option<&AutoConfig>) -> String {
     let arguments = crate::automation::arguments(profile, settings, auto);
+    let prefix = if matches!(profile.architecture.as_str(), "ppc64le" | "ppc64") {
+        if settings.boot_transport == "http" { format!("{}/", http_root(settings, profile)) }
+        else { "/".into() }
+    } else { String::new() };
+    let kernel = format!("{prefix}{}", profile.kernel);
     format!(
         "DEFAULT boot\nLABEL boot\n  KERNEL {}\n{}{}  APPEND {}\n",
-        profile.kernel,
+        kernel,
         if profile.initrd.is_empty() {
             String::new()
         } else {
-            format!("  INITRD {}\n", profile.initrd)
+            format!("  INITRD {prefix}{}\n", profile.initrd)
         },
         if profile.dtb.is_empty() {
             String::new()
@@ -606,6 +610,10 @@ pub fn virtual_file(
             | "bootah-native/grub.cfg"
             | "bootah-native/grub/grub.cfg"
     ) {
+        if (profile.kind == "linux" || profile.system_id == "freebsd") && profile.architecture == "ppc64le" {
+            let arguments = crate::automation::arguments(profile, settings, auto);
+            return Some(format!("set timeout=0\nset default=0\nmenuentry 'Bootah' {{\n linux /{} {}\n initrd /{}\n}}\n", profile.kernel, arguments, profile.initrd).into_bytes());
+        }
         if let Some(config) = crate::native_uefi::grub(profile, settings, auto) {
             return Some(config);
         }
@@ -646,7 +654,8 @@ pub fn virtual_file(
     if name == "boot.ipxe" {
         return Some(ipxe(profile, settings, auto).into_bytes());
     }
-    if name.starts_with("pxelinux.cfg/") || name == "extlinux/extlinux.conf" {
+    if name.strip_prefix("pxelinux.cfg/").is_some_and(|tail| !tail.is_empty() && !tail.contains('/'))
+        || name == "bootah-petitboot" || name == "extlinux/extlinux.conf" {
         let mut config = pxe(profile, settings, auto);
         if name.starts_with("pxelinux.cfg/") && profile.kind == "linux" {
             config.push_str("  IPAPPEND 2\n");
@@ -710,5 +719,31 @@ mod snp_tests {
         profile.boot_files.insert("x64-efi".into(), "custom.efi".into());
         assert_eq!(super::pxe_loader(&profile, "x64-efi"), "custom.efi");
         std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod power_tests {
+    #[test]
+    fn imported_power_firmware_configs_render_original_media_arguments() {
+        let profile: crate::model::Profile = serde_json::from_value(serde_json::json!({
+            "id":"power", "name":"Power", "architecture":"ppc64le", "kind":"linux",
+            "root":"/unused", "kernel":"install/vmlinux", "initrd":"bootah-compat-initrd-0",
+            "arguments":"bootah.server={server} bootah.export={profile}",
+            "boot_files":{"powerpc-of":"grub-powerpc.elf","power-opal":"bootah-petitboot"}
+        })).unwrap();
+        let mut settings = crate::model::Settings::default();
+        settings.boot_transport = "tftp".into();
+        let grub = String::from_utf8(super::virtual_file(&profile, "boot/grub/grub.cfg", &settings, None).unwrap()).unwrap();
+        let pxe = String::from_utf8(super::virtual_file(&profile, "pxelinux.cfg/default", &settings, None).unwrap()).unwrap();
+        assert!(grub.contains("linux /install/vmlinux bootah.server=192.168.50.1 bootah.export=power"));
+        assert!(grub.contains("initrd /bootah-compat-initrd-0"));
+        assert!(pxe.contains("KERNEL /install/vmlinux"));
+        assert!(pxe.contains("bootah.export=power"));
+        settings.boot_transport = "http".into();
+        assert!(super::pxe(&profile, &settings, None).contains("KERNEL http://192.168.50.1:8080/boot/power/install/vmlinux"));
+        assert_eq!(super::pxe_loader(&profile, "powerpc-of"), "grub-powerpc.elf");
+        assert_eq!(super::pxe_loader(&profile, "power-opal"), "bootah-petitboot");
+        assert!(super::virtual_file(&profile, "pxelinux.cfg/install/vmlinux", &settings, None).is_none());
     }
 }

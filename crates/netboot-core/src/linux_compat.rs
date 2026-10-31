@@ -8,6 +8,7 @@ use std::{
 pub fn client(architecture: &str) -> Result<PathBuf, String> {
     let suffix = match architecture {
         "x64" | "x86_64" | "amd64" => "x64",
+        "ppc64le" => "ppc64le",
         _ => {
             return Err(format!(
                 "Linux media client is unavailable for architecture {architecture}"

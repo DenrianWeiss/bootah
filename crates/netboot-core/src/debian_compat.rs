@@ -141,6 +141,7 @@ transport=nbd
 server=
 port=10809
 export_name=
+bootif=
 iface=
 for arg in $(cat /proc/cmdline); do
     case "$arg" in
@@ -149,6 +150,7 @@ for arg in $(cat /proc/cmdline); do
         bootah.port=*) port=${arg#*=} ;;
         bootah.export=*) export_name=${arg#*=} ;;
         bootah.iface=*) iface=${arg#*=} ;;
+        BOOTIF=01-*) bootif=${arg#BOOTIF=01-} ;;
     esac
 done
 fail() { logger -t bootah-media "$*"; echo "Bootah media: $*" >/dev/console; exit 1; }
@@ -156,33 +158,40 @@ fail() { logger -t bootah-media "$*"; echo "Bootah media: $*" >/dev/console; exi
 depmod -a
 udevadm trigger --action=add
 udevadm settle --timeout=10 || true
-if [ -z "$iface" ]; then
+if [ -z "$iface" ] && [ -n "$bootif" ]; then
+    bootif=$(printf '%s' "$bootif" | tr 'A-F-' 'a-f:')
     for interface in /sys/class/net/*; do
-        [ "${interface##*/}" = lo ] && continue
-        candidate=${interface##*/}
-        ip link set "$candidate" up || continue
-        [ -n "$iface" ] || iface=$candidate
-        if [ "$(cat "$interface/carrier" 2>/dev/null || true)" = 1 ]; then
-            iface=$candidate
+        if [ "$(cat "$interface/address" 2>/dev/null || true)" = "$bootif" ]; then
+            iface=${interface##*/}
             break
         fi
     done
+    [ -n "$iface" ] || fail 'boot interface not found'
 fi
-[ -n "$iface" ] || fail 'no network interface'
-ip link set "$iface" up
-echo "Bootah media: DHCP on $iface ($(cat /sys/class/net/$iface/address))" >/dev/console
-udhcpc -n -q -t 3 -T 3 -i "$iface" -s /etc/udhcpc/default.script || fail 'DHCP failed'
+[ "$transport" = nbd ] || fail 'unsupported transport'
+modprobe nbd nbds_max=1 max_part=0 || fail 'matching NBD module failed'
+udevadm settle --timeout=10 || true
 mkdir -p /cdrom
-case "$transport" in
-    nbd)
-        modprobe nbd nbds_max=1 max_part=0 || fail 'matching NBD module failed'
-        udevadm settle --timeout=10 || true
-        echo "Bootah media: connecting NBD $server:$port/$export_name" >/dev/console
-        /usr/bin/bootah-media nbd "$server" "$port" "$export_name" /dev/nbd0 || fail 'NBD connection failed'
-        mount -t iso9660 -o ro /dev/nbd0 /cdrom || fail 'NBD ISO mount failed'
-        ;;
-    *) fail 'unsupported transport' ;;
-esac
+connected=
+for interface in /sys/class/net/*; do
+    candidate=${interface##*/}
+    [ "$candidate" = lo ] && continue
+    [ -z "$iface" ] || [ "$candidate" = "$iface" ] || continue
+    ip link set "$candidate" up || continue
+    echo "Bootah media: DHCP on $candidate ($(cat "$interface/address"))" >/dev/console
+    if udhcpc -n -q -t 3 -T 3 -i "$candidate" -s /etc/udhcpc/default.script; then
+        echo "Bootah media: connecting NBD $server:$port/$export_name on $candidate" >/dev/console
+        if /usr/bin/bootah-media nbd "$server" "$port" "$export_name" /dev/nbd0; then
+            connected=$candidate
+            break
+        fi
+    fi
+    [ -z "$iface" ] || fail 'selected interface cannot connect to installation media'
+    ip addr flush dev "$candidate" || true
+    ip link set "$candidate" down || true
+done
+[ -n "$connected" ] || fail 'no network interface could connect to installation media'
+mount -t iso9660 -o ro /dev/nbd0 /cdrom || fail 'NBD ISO mount failed'
 [ -f /cdrom/.disk/info ] || fail 'mounted image is not Debian installation media'
 debconf-set cdrom-detect/cdrom_device /dev/nbd0
 debconf-set cdrom-detect/cdrom_fs iso9660

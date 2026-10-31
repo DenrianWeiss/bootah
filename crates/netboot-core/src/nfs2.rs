@@ -1,4 +1,4 @@
-//! Read-only NFSv2/UDP and MOUNTv1, RFC 1094 and RFC 1057.
+//! Read-only NFS/UDP: NFSv2/MOUNTv1 plus the shared NFSv3/MOUNTv3 backend.
 use crate::{model::Shared, nfs::MediaFs};
 use nfsserve::{
     nfs::{fattr3, ftype3, nfsstat3},
@@ -304,6 +304,7 @@ pub struct Server {
     exports: BTreeMap<String, (std::path::PathBuf, Export)>,
     generation: u64,
     state: Shared,
+    v3: BTreeMap<String, (std::path::PathBuf, crate::nfs::DatagramExport)>,
     trace_bytes: u64,
     trace_offset: Option<u32>,
 }
@@ -317,6 +318,7 @@ impl Server {
             exports: BTreeMap::new(),
             generation,
             state,
+            v3: BTreeMap::new(),
             trace_bytes: 0,
             trace_offset: None,
         }
@@ -328,6 +330,27 @@ impl Server {
             .ok()?
             .profile_for(ip)
             .filter(crate::nfs::eligible)?;
+        if packet.len() >= 24 && packet[4..12] == [0,0,0,0,0,0,0,2]
+            && matches!(u32::from_be_bytes(packet[12..16].try_into().ok()?), 100003 | 100005)
+            && packet[16..20] == 3u32.to_be_bytes()
+        {
+            if self.v3.get(&profile.id).is_none_or(|(root, _)| root != &profile.root) {
+                let backend = crate::nfs::DatagramExport::new(&profile.root, &profile.id).await.ok()?;
+                self.v3.insert(profile.id.clone(), (profile.root.clone(), backend));
+            }
+            let response = self.v3.get_mut(&profile.id)?.1.request(packet).await;
+            if std::env::var_os("BOOTAH_NFS_TRACE").is_some() {
+                let procedure = u32::from_be_bytes(packet[20..24].try_into().ok()?);
+                let bytes = response.as_ref().map_or(0, Vec::len) as u64;
+                let before = self.trace_bytes;
+                self.trace_bytes += bytes;
+                if procedure != 6 || before / (8 * 1024 * 1024) != self.trace_bytes / (8 * 1024 * 1024) {
+                    eprintln!("NFS3 UDP peer={ip} profile={} proc={procedure} reply={bytes} transferred={}", profile.id, self.trace_bytes);
+                }
+            }
+            if response.is_none() { self.v3.remove(&profile.id); }
+            return (assignment(&self.state, ip).as_deref() == Some(&profile.id)).then_some(response).flatten();
+        }
         if self
             .exports
             .get(&profile.id)

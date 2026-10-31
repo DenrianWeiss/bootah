@@ -44,6 +44,10 @@ mod tests {
             assert_eq!(message(input, "en", "en"), "EFI certificate detected");
             assert_eq!(message(input, "zh-CN", "en"), "已检测到 EFI 证书");
         }
+        assert_eq!(
+            message("NetBSD amd64 INSTALL ramdisk. Installation sets: present.", "zh-CN", "en"),
+            "NetBSD amd64 安装内存盘。已包含安装集。"
+        );
         let input = "/tmp/镜像 / boot.iso: No matching EFI certificate / 未找到匹配架构的 EFI 证书";
         assert_eq!(
             message(input, "zh-CN", "en"),

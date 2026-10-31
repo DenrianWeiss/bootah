@@ -421,6 +421,8 @@ pub fn import_with_options(
         }
         for prepare in [
             crate::netbsd::prepare,
+            crate::freebsd::prepare,
+            crate::openbsd::prepare,
             crate::solaris::prepare,
             crate::windows::prepare,
         ] {

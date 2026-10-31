@@ -39,7 +39,7 @@ pub fn prepare(source: &Path, root: &Path, id: &str) -> Result<Option<ImportResu
             .find(|p| {
                 let p = p.to_ascii_lowercase();
                 prefixes.iter().any(|prefix| p.starts_with(prefix))
-                    && matches!(
+                    && ((port == "macppc" && matches!(p.rsplit('/').next(), Some("netbsd-generic_md.gz" | "netbsd-generic_md"))) || matches!(
                         p.rsplit('/').next(),
                         Some(
                             "netbsd-install.gz"
@@ -47,7 +47,7 @@ pub fn prepare(source: &Path, root: &Path, id: &str) -> Result<Option<ImportResu
                                 | "netbsd-install64.gz"
                                 | "netbsd-install64"
                         )
-                    )
+                    ))
             })
             .or(instkernel.as_ref())
             .or(generic_with_ramdisk.as_ref());
@@ -68,7 +68,7 @@ pub fn prepare(source: &Path, root: &Path, id: &str) -> Result<Option<ImportResu
             "riscv64" => &[("bootriscv64.efi", "riscv64-efi")],
             "alpha" => &[("netboot", "default")],
             "sparc64" => &[("ofwboot.net", "default")],
-            "ppc" => &[("ofwboot.xcf", "default")],
+            "ppc" => &[("ofwboot.xcf", "default"), ("ofwboot.xcf", "powerpc-of")],
             _ => &[
                 ("pxeboot_ia32.bin", "x86-bios"),
                 ("bootx64.efi", "x64-efi"),
@@ -89,10 +89,17 @@ pub fn prepare(source: &Path, root: &Path, id: &str) -> Result<Option<ImportResu
                         || p.to_ascii_lowercase().starts_with("usr/mdec/"))
             }) {
                 image.materialize(path, &profile_root.join(suffix))?;
+                if suffix.ends_with(".efi") && crate::media::binary_arch(&profile_root.join(suffix)) != Some(architecture) {
+                    fs::remove_file(profile_root.join(suffix)).map_err(|e| e.to_string())?;
+                    continue;
+                }
                 boot_files.insert(key.into(), suffix.into());
             }
         }
         image.materialize(kernel, &profile_root.join("netbsd"))?;
+        if matches!(architecture, "x86" | "x64" | "arm64") && crate::media::binary_arch(&profile_root.join("netbsd")) != Some(architecture) {
+            return Err(format!("NetBSD {port}: installation kernel architecture mismatch"));
+        }
         if architecture == "alpha" && kernel.to_ascii_lowercase().ends_with(".gz") {
             use std::io::Read;
             let input = fs::File::open(profile_root.join("netbsd")).map_err(|e| e.to_string())?;
@@ -142,11 +149,11 @@ pub fn prepare(source: &Path, root: &Path, id: &str) -> Result<Option<ImportResu
             .iter()
             .any(|p| p.starts_with(&format!("{port}/binary/sets/")));
         let note = format!(
-            "NetBSD {port} INSTALL ramdisk. Installation sets: {}. Select the ISO HTTP tree /{port}/binary/sets/ in sysinst; disk selection remains interactive.",
+            "NetBSD {port}: INSTALL ramdisk. {} Select the ISO HTTP tree /{port}/binary/sets/ in sysinst; disk selection remains interactive.",
             if sets {
-                "present"
+                "Installation sets are present."
             } else {
-                "absent (external matching release required)"
+                "Installation sets are absent; an external matching release is required."
             }
         );
         if boot_files.is_empty() {
@@ -157,6 +164,7 @@ pub fn prepare(source: &Path, root: &Path, id: &str) -> Result<Option<ImportResu
         if !sets {
             warnings.push(format!("NetBSD {port}: ISO lacks installation sets"));
         }
+        let status = if boot_files.is_empty() { "needs-attention" } else { "prepared" };
         profiles.push(Profile { secure_boot: None,
             system_id: String::new(),
             system_name: String::new(),
@@ -175,7 +183,7 @@ pub fn prepare(source: &Path, root: &Path, id: &str) -> Result<Option<ImportResu
             dtb: String::new(),
             arguments: String::new(),
             media: source.to_string_lossy().into_owned(),
-            status: "prepared".into(),
+            status: status.into(),
             notes: note,
             boot_evidence: None,
         });

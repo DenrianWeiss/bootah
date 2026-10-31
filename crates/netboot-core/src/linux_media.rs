@@ -362,7 +362,7 @@ pub fn prepare(
                 && (name.ends_with("/vmlinuz") || name.ends_with("/vmlinux"))
                 && image.find(&format!("{parent}/initrd.gz")).is_some()
         })
-        && image.find("linux").is_none()
+        && !["linux", "vmlinux", "vmlinuz"].iter().any(|p| image.find(p).is_some())
         && !entries.keys().any(|p| p.starts_with("debian-installer/"))
     {
         let cache = root.join("bootah-netboot");
@@ -378,7 +378,7 @@ pub fn prepare(
                 let e = e.map_err(|e| e.to_string())?;
                 if e.file_type().map_err(|e| e.to_string())?.is_dir() {
                     walk(root, &e.path(), out)?
-                } else if e.file_name() == "linux"
+                } else if matches!(e.file_name().to_str(), Some("linux" | "vmlinux" | "vmlinuz"))
                     && e.path().parent().unwrap().join("initrd.gz").is_file()
                 {
                     out.push(
@@ -394,8 +394,9 @@ pub fn prepare(
         }
         walk(root, &cache, &mut network_files)?;
         for kernel in &network_files {
-            let parent = kernel.rsplit_once('/').unwrap().0;
-            candidates.push(("debian-netboot",kernel.clone(),format!("{parent}/initrd.gz"),format!("ip=dhcp cdrom-detect/load_media=false mirror/country=manual mirror/http/hostname={{server}}:{{http_port}} mirror/http/directory=/boot/{{profile}} mirror/http/proxy={release_args}")));
+            let parent = kernel.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
+            let initrd = if parent.is_empty() { "initrd.gz".into() } else { format!("{parent}/initrd.gz") };
+            candidates.push(("debian-netboot",kernel.clone(),initrd,format!("ip=dhcp cdrom-detect/load_media=false mirror/country=manual mirror/http/hostname={{server}}:{{http_port}} mirror/http/directory=/boot/{{profile}} mirror/http/proxy={release_args}")));
         }
     }
 
@@ -408,7 +409,7 @@ pub fn prepare(
         }
         let (family, initrd, args) = if casper_source
             && lower.starts_with("casper/")
-            && base.starts_with("vmlinuz")
+            && (base.starts_with("vmlinuz") || base == "vmlinux")
         {
             (
                 "casper",
@@ -423,11 +424,11 @@ pub fn prepare(
                 },
             )
         } else if (anaconda_stage2 || image.find(".treeinfo").is_some() || uos_server)
-            && lower == "images/pxeboot/vmlinuz"
+            && matches!(lower.as_str(), "images/pxeboot/vmlinuz" | "ppc/ppc64/vmlinuz")
         {
             (
                 "anaconda",
-                image.find("images/pxeboot/initrd.img"),
+                image.find(&format!("{parent}/initrd.img")),
                 if kylin_server {
                     "ip=dhcp inst.repo={base} inst.stage2={base} fpi_to_tail=off".into()
                 } else if uos_server && !anaconda_repository {
@@ -545,7 +546,7 @@ pub fn prepare(
                 ),
             )
         } else if (lower.starts_with("debian-installer/") || (debian && parent.is_empty()))
-            && base == "linux"
+            && matches!(base, "linux" | "vmlinux" | "vmlinuz")
         {
             (
                 "debian-netboot",
@@ -606,8 +607,6 @@ pub fn prepare(
     let mut profiles = Vec::new();
     let mut warnings = Vec::new();
     for (index, (family, kernel, initrd, mut arguments)) in candidates.into_iter().enumerate() {
-        let automatic_compat = !linux_compat && matches!(family, "debian-cd" | "aosc-livekit");
-        let linux_compat = linux_compat || automatic_compat;
         let original = if family == "nixos-iso" {
             Some(("isolinux/isolinux.cfg".into(), arguments.clone()))
         } else if family == "live-boot"
@@ -635,6 +634,10 @@ pub fn prepare(
         let architecture = crate::media::binary_arch(&cached)
             .unwrap_or("unknown")
             .to_string();
+        let automatic_compat = !linux_compat
+            && matches!(family, "debian-cd" | "aosc-livekit")
+            && matches!(architecture.as_str(), "x64" | "ppc64le");
+        let linux_compat = linux_compat || automatic_compat;
         let mut note = format!("Detected {family}; original ISO retained, files served on demand.");
         if family == "debian-netboot" && !entries.keys().any(|p| p.starts_with("dists/")) {
             note.push_str(" This netboot medium needs an external package mirror; no repository is present in the ISO.")
@@ -671,6 +674,21 @@ pub fn prepare(
             if let Some(path) = crate::media::asset(asset) {
                 fs::copy(path, root.join(asset)).map_err(|e| e.to_string())?;
                 boot_files.insert(key.into(), asset.into());
+            }
+        }
+        if architecture == "ppc64le" {
+            if let Some(path) = crate::media::asset("grub-powerpc.elf") {
+                fs::copy(path, root.join("grub-powerpc.elf")).map_err(|e| e.to_string())?;
+                boot_files.insert("powerpc-of".into(), "grub-powerpc.elf".into());
+            }
+            // Served dynamically; keep a file for profile validation and external tools.
+            fs::write(root.join("bootah-petitboot"), "# Generated dynamically by Bootah\n")
+                .map_err(|e| e.to_string())?;
+            for key in ["power-opal", "powerpc-epapr", "default"] {
+                boot_files.insert(key.into(), "bootah-petitboot".into());
+            }
+            if !boot_files.contains_key("powerpc-of") {
+                warnings.push("SLOF/Open Firmware requires grub-powerpc.elf; run tools/power-boot/build.sh with GRUB >= 2.14.".into());
             }
         }
         let mut prepared_initrd = initrd.clone();
@@ -724,11 +742,7 @@ pub fn prepare(
                 br#"{"version":1,"transport":"nbd"}"#,
             )
             .map_err(|e| e.to_string())?;
-            arguments = if family == "debian-cd" {
-                "bootah.media=nbd bootah.server={server} bootah.port={nbd_port} bootah.export={profile} bootah.iso={base}/media.iso".into()
-            } else {
-                crate::linux_fallback::compatibility_arguments(&arguments, family)
-            };
+            arguments = crate::linux_fallback::compatibility_arguments(&arguments, family);
             note.push_str(if automatic_compat {
                 " Automatically selected original ISO compatibility after validating this image's kernel modules and initramfs layout; the target kernel reads the original ISO over read-only NBD."
             } else {

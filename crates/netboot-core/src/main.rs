@@ -25,6 +25,8 @@ mod signed_ipxe;
 mod secure_boot;
 mod nbd;
 mod netbsd;
+mod freebsd;
+mod openbsd;
 mod network;
 mod neighbors;
 mod nfs;

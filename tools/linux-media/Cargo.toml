@@ -1,0 +1,12 @@
+[package]
+name = "bootah-media"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+[workspace]
+[dependencies]
+libc = "0.2"
+[profile.release]
+strip = true
+panic = "abort"
+opt-level = "s"

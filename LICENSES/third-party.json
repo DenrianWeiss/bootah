@@ -1447,6 +1447,20 @@
     "licenseUrl": ""
   },
   {
+    "name": "iPXE shim",
+    "version": "",
+    "source": "https://github.com/ipxe/shim",
+    "license": "BSD-2-Clause; bundled component licenses",
+    "notice": "Copyright 2012 Red Hat, Inc <mjg@redhat.com>\n\nRedistribution and use in source and binary forms, with or without\nmodification, are permitted provided that the following conditions\nare met:\n\nRedistributions of source code must retain the above copyright\nnotice, this list of conditions and the following disclaimer.\n\nRedistributions in binary form must reproduce the above copyright\nnotice, this list of conditions and the following disclaimer in the\ndocumentation and/or other materials provided with the\ndistribution.\n\nTHIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS\n\"AS IS\" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT\nLIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS\nFOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE\nCOPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,\nINDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES\n(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR\nSERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)\nHOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,\nSTRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)\nARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED\nOF THE POSSIBILITY OF SUCH DAMAGE.\n\nSignificant portions of this code are derived from Tianocore\n(http://tianocore.sf.net) and are Copyright 2009-2012 Intel\nCorporation.\n",
+    "platforms": [
+      "android",
+      "linux",
+      "macos",
+      "windows"
+    ],
+    "licenseUrl": ""
+  },
+  {
     "name": "itertools",
     "version": "0.14.0",
     "source": "https://github.com/rust-itertools/itertools",
