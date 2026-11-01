@@ -165,7 +165,10 @@ impl Session {
             let name = if matches!(
                 profile.architecture.as_str(),
                 "sparc" | "sparc32" | "sparc64"
-            ) && hex.len() == 8
+            ) && (!crate::sparc_obp::enabled(&profile)
+                || (hex.eq_ignore_ascii_case(&format!("{:08X}", u32::from(ip)))
+                    && !requested.contains('/')))
+                && hex.len() == 8
                 && hex.chars().all(|c| c.is_ascii_hexdigit())
             {
                 profile

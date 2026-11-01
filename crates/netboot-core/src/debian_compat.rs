@@ -2,7 +2,7 @@ use crate::media_source::Image;
 use flate2::read::GzDecoder;
 use std::{fs, io::Read, path::Path};
 
-fn kernel_release(original: &Path) -> Result<(String, bool), String> {
+fn kernel_releases(original: &Path) -> Result<Vec<(String, bool)>, String> {
     let mut bytes = Vec::new();
     GzDecoder::new(fs::File::open(original).map_err(|e| e.to_string())?)
         .take(128 * 1024 * 1024 + 1)
@@ -11,6 +11,7 @@ fn kernel_release(original: &Path) -> Result<(String, bool), String> {
     if bytes.len() > 128 * 1024 * 1024 {
         return Err("Debian CD initrd exceeds adapter budget".into());
     }
+    let mut releases = std::collections::BTreeMap::new();
     let mut offset = 0usize;
     while offset + 110 <= bytes.len() {
         let header = &bytes[offset..offset + 110];
@@ -45,7 +46,7 @@ fn kernel_release(original: &Path) -> Result<(String, bool), String> {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b".+-_".contains(&b))
         {
-            return Ok((version.into(), merged_usr));
+            releases.insert(version.to_string(), merged_usr);
         }
         if name == "TRAILER!!!" {
             break;
@@ -57,7 +58,10 @@ fn kernel_release(original: &Path) -> Result<(String, bool), String> {
             .filter(|n| *n <= bytes.len())
             .ok_or("Truncated Debian CPIO contents")?;
     }
-    Err("Original Debian CD initrd has no kernel module release".into())
+    if releases.is_empty() {
+        return Err("Original Debian CD initrd has no kernel module release".into());
+    }
+    Ok(releases.into_iter().collect())
 }
 
 pub fn prepare(
@@ -67,54 +71,66 @@ pub fn prepare(
     cache: &Path,
     architecture: &str,
 ) -> Result<(), String> {
-    let (version, merged_usr) = kernel_release(original)?;
+    let releases = kernel_releases(original)?;
+    let merged_usr = releases[0].1;
+    if releases.iter().any(|(_, merged)| *merged != merged_usr) {
+        return Err("Debian initrd has inconsistent kernel module directory layouts".into());
+    }
     let overlay = cache.join("overlay");
     fs::create_dir_all(&overlay).map_err(|e| e.to_string())?;
-    for package in ["nic-modules", "nbd-modules"] {
-        let prefix = format!("{package}-{version}-di_");
-        let path = image
-            .entries()
-            .iter()
-            .find(|(name, e)| {
-                !e.is_dir
-                    && name
-                        .rsplit('/')
-                        .next()
-                        .is_some_and(|base| base.starts_with(&prefix) && base.ends_with(".udeb"))
-            })
-            .map(|(name, _)| name)
-            .ok_or_else(|| format!("Debian original ISO lacks matching {package} for {version}"))?;
-        let archive = cache.join(format!("{package}.udeb"));
-        let unpack = cache.join(package);
-        fs::create_dir_all(&unpack).map_err(|e| e.to_string())?;
-        image.materialize(path, &archive)?;
-        crate::media::extract_external(&archive, &unpack, 16)?;
-        let tar = fs::read_dir(&unpack)
-            .map_err(|e| e.to_string())?
-            .filter_map(Result::ok)
-            .map(|e| e.path())
-            .find(|p| {
-                p.file_name().is_some_and(|n| {
-                    n.to_string_lossy() == "data.tar"
-                        || n.to_string_lossy().starts_with("data.tar.")
+    for (version, _) in &releases {
+        for package in ["nic-modules", "nbd-modules"] {
+            let prefix = format!("{package}-{version}-di_");
+            let path = image
+                .entries()
+                .iter()
+                .find(|(name, e)| {
+                    !e.is_dir
+                        && name.rsplit('/').next().is_some_and(|base| {
+                            base.starts_with(&prefix) && base.ends_with(".udeb")
+                        })
                 })
-            })
-            .ok_or_else(|| format!("Missing Debian {package} data archive"))?;
-        if !tar.is_file() {
-            return Err(format!("Cannot unpack Debian {package} data archive"));
+                .map(|(name, _)| name)
+                .ok_or_else(|| {
+                    format!("Debian original ISO lacks matching {package} for {version}")
+                })?;
+            let archive = cache.join(format!("{package}-{version}.udeb"));
+            let unpack = cache.join(format!("{package}-{version}"));
+            fs::create_dir_all(&unpack).map_err(|e| e.to_string())?;
+            image.materialize(path, &archive)?;
+            crate::media::extract_external(&archive, &unpack, 16)?;
+            let tar = fs::read_dir(&unpack)
+                .map_err(|e| e.to_string())?
+                .filter_map(Result::ok)
+                .map(|e| e.path())
+                .find(|p| {
+                    p.file_name().is_some_and(|n| {
+                        n.to_string_lossy() == "data.tar"
+                            || n.to_string_lossy().starts_with("data.tar.")
+                    })
+                })
+                .ok_or_else(|| format!("Missing Debian {package} data archive"))?;
+            if !tar.is_file() {
+                return Err(format!("Cannot unpack Debian {package} data archive"));
+            }
+            crate::media::extract_external(&tar, &overlay, 16)?;
         }
-        crate::media::extract_external(&tar, &overlay, 16)?;
     }
     if merged_usr && overlay.join("lib").is_dir() {
         fs::create_dir_all(overlay.join("usr")).map_err(|e| e.to_string())?;
         fs::rename(overlay.join("lib"), overlay.join("usr/lib")).map_err(|e| e.to_string())?;
     }
-    prepare_hook(&overlay, architecture, merged_usr)?;
+    prepare_hook(&overlay, original, architecture, merged_usr)?;
     crate::linux_compat::append(original, output, &overlay)
 }
 
-fn prepare_hook(overlay: &Path, architecture: &str, merged_usr: bool) -> Result<(), String> {
-    let client = crate::linux_compat::client(architecture)?;
+fn prepare_hook(
+    overlay: &Path,
+    original: &Path,
+    architecture: &str,
+    merged_usr: bool,
+) -> Result<(), String> {
+    let client = crate::linux_compat::client_for_initrd(original, architecture)?;
     fs::create_dir_all(overlay.join("usr/bin")).map_err(|e| e.to_string())?;
     fs::copy(client, overlay.join("usr/bin/bootah-media")).map_err(|e| e.to_string())?;
     let hook = overlay.join(if merged_usr {
@@ -225,3 +241,35 @@ echo 'Bootah media: original ISO mounted at /cdrom' >/dev/console
 grep ' /cdrom ' /proc/mounts >/dev/console
 cat /cdrom/.disk/info >/dev/console
 "#;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn retains_both_parisc_kernel_module_releases() {
+        use std::io::Write;
+        let path = std::env::temp_dir().join(format!("bootah-releases-{}", uuid::Uuid::new_v4()));
+        let file = std::fs::File::create(&path).unwrap();
+        let mut output = flate2::write::GzEncoder::new(file, flate2::Compression::fast());
+        for version in ["6.12.17-parisc", "6.12.17-parisc64"] {
+            crate::initramfs::entry(
+                &mut output,
+                &format!("usr/lib/modules/{version}/modules.dep"),
+                0o100644,
+                0,
+                &mut std::io::empty(),
+            )
+            .unwrap();
+        }
+        crate::initramfs::entry(&mut output, "TRAILER!!!", 0, 0, &mut std::io::empty()).unwrap();
+        output.finish().unwrap().flush().unwrap();
+        let releases = super::kernel_releases(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(
+            releases,
+            vec![
+                ("6.12.17-parisc".into(), true),
+                ("6.12.17-parisc64".into(), true)
+            ]
+        );
+    }
+}

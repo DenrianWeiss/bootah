@@ -164,6 +164,11 @@ pub fn prepare(source: &Path, root: &Path, id: &str) -> Result<Option<ImportResu
         if !sets {
             warnings.push(format!("NetBSD {port}: ISO lacks installation sets"));
         }
+        if architecture == "sparc64" {
+            if let Some(entry) = boot_files.get("default").cloned() {
+                boot_files.insert("sparc64".into(), entry);
+            }
+        }
         let status = if boot_files.is_empty() { "needs-attention" } else { "prepared" };
         profiles.push(Profile { secure_boot: None,
             system_id: String::new(),
@@ -187,6 +192,21 @@ pub fn prepare(source: &Path, root: &Path, id: &str) -> Result<Option<ImportResu
             notes: note,
             boot_evidence: None,
         });
+    }
+    if profiles.is_empty() {
+        for path in &paths {
+            let Some((port, file)) = path.split_once('/') else { continue; };
+            if !file.eq_ignore_ascii_case("INSTALL.txt")
+                || !paths.iter().any(|p| p.starts_with(&format!("{port}/installation/"))) {
+                continue;
+            }
+            let notes = image.read(path, 4 * 1024 * 1024)?;
+            if !notes.windows(6).any(|w| w == b"NetBSD") { continue; }
+            if port == "sparc" {
+                return Err("NetBSD/sparc is a 32-bit installation image, not SPARC64. This port is not supported by Bootah yet; use NetBSD/sparc64 media for a SPARC64 machine.".into());
+            }
+            return Err(format!("NetBSD {port}: no supported installation ramdisk and network loader were found"));
+        }
     }
     Ok((!profiles.is_empty()).then_some(ImportResult { profiles, warnings }))
 }

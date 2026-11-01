@@ -735,7 +735,7 @@ mod tests {
     }
     #[test]
     fn negotiate_guest_share() {
-        let state = Arc::new(Mutex::new(Store {
+        let state = Arc::new(Mutex::new(Store { portmap_sender: Default::default(), boot_addresses: Default::default(),
             config: Config::default(),
             events: vec![],
             path: "unused".into(),
@@ -780,7 +780,7 @@ mod tests {
         };
         let mut config = Config::default();
         config.profiles.push(profile);
-        let state = Arc::new(Mutex::new(Store {
+        let state = Arc::new(Mutex::new(Store { portmap_sender: Default::default(), boot_addresses: Default::default(),
             config,
             events: vec![],
             path: "unused".into(),

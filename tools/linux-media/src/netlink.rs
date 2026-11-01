@@ -84,7 +84,7 @@ impl Netlink {
         sequence: u32,
         attrs: Vec<u8>,
         expect_reply: bool,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Option<Vec<u8>>, String> {
         let mut message = Vec::new();
         message.extend_from_slice(&((20 + attrs.len()) as u32).to_ne_bytes());
         message.extend_from_slice(&family.to_ne_bytes());
@@ -151,6 +151,12 @@ impl Netlink {
                         }
                         let error = i32::from_ne_bytes(payload[..4].try_into().unwrap());
                         if error != 0 {
+                            if family == 16
+                                && command == 3
+                                && matches!(-error, libc::ENOENT | libc::EOPNOTSUPP)
+                            {
+                                return Ok(None);
+                            }
                             return Err(format!(
                                 "NBD netlink: {}",
                                 io::Error::from_raw_os_error(-error)
@@ -167,13 +173,13 @@ impl Netlink {
                 offset += align(len);
             }
             if acknowledged && (!expect_reply || response.is_some()) {
-                return Ok(response.unwrap_or_default());
+                return Ok(Some(response.unwrap_or_default()));
             }
         }
         Err("Netlink response limit exceeded".into())
     }
 }
-pub fn connect(socket: i32, size: u64, flags: u16, device: &str) -> Result<(), String> {
+pub fn connect(socket: i32, size: u64, flags: u16, device: &str) -> Result<bool, String> {
     let number = device
         .strip_prefix("/dev/nbd")
         .ok_or("NBD requires a /dev/nbdN device")?;
@@ -187,6 +193,9 @@ pub fn connect(socket: i32, size: u64, flags: u16, device: &str) -> Result<(), S
     let family = netlink.request(16, 3, 2, 1, lookup, true).map_err(|e| {
         format!("Kernel NBD generic-netlink unavailable (matching nbd module required): {e}")
     })?;
+    let Some(family) = family else {
+        return Ok(false);
+    };
     let family_id = attributes(&family)?
         .into_iter()
         .find(|(kind, _)| *kind == 1)
@@ -205,7 +214,9 @@ pub fn connect(socket: i32, size: u64, flags: u16, device: &str) -> Result<(), S
     let mut items = Vec::new();
     attr(&mut items, 1 | 0x8000, &socket_attr);
     attr(&mut setup, 7 | 0x8000, &items);
-    let connected = netlink.request(family_id, 1, 1, 2, setup, true)?;
+    let connected = netlink
+        .request(family_id, 1, 1, 2, setup, true)?
+        .ok_or("NBD CONNECT returned no response")?;
     let actual = attributes(&connected)?
         .into_iter()
         .find(|(kind, _)| *kind == 1)
@@ -221,7 +232,7 @@ pub fn connect(socket: i32, size: u64, flags: u16, device: &str) -> Result<(), S
             .and_then(|v| v.trim().parse::<u64>().ok())
             == Some(size / 512)
         {
-            return Ok(());
+            return Ok(true);
         }
         std::thread::sleep(Duration::from_millis(50));
     }

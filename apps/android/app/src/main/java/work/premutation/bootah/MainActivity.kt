@@ -248,45 +248,7 @@ class MainActivity : Activity() {
         worker.execute{try{val binary=java.io.File(applicationInfo.nativeLibraryDir,"libnetboot_core.so");val config=java.io.File(filesDir,"state.json");val command=mutableListOf(binary.path,"--export-diagnostics","--config",config.path,"--log-level",level);if(raw)command.add("--include-private");val process=ProcessBuilder(command).start();val data=process.inputStream.use{it.readBytes()};val errors=process.errorStream.bufferedReader().use{it.readText()};if(process.waitFor()!=0)throw java.io.IOException(errors);contentResolver.openOutputStream(uri,"w")?.use{it.write(data)}?:throw java.io.IOException("Cannot open destination");runOnUiThread{Toast.makeText(this,t("诊断日志已导出","Diagnostics exported"),Toast.LENGTH_LONG).show()}}catch(e:Exception){runOnUiThread{Toast.makeText(this,e.message?:t("导出失败","Export failed"),Toast.LENGTH_LONG).show()}}}
     }
 
-    private fun imageDetails(p:JSONObject){
-        val panel=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(24),dp(8),dp(24),dp(8))}
-        fun field(label:String,value:String){if(value.isBlank()||value=="null")return;panel.addView(TextView(this).apply{text=tr(label);setTextColor(muted);textSize=12f;setPadding(0,dp(10),0,0)});panel.addView(EditText(this).apply{setText(value);setTextColor(ink);textSize=14f;isFocusable=false;isCursorVisible=false;setTextIsSelectable(true);maxLines=5})}
-        if(p.optJSONObject("secure_boot")?.optBoolean("eligible")==true)request("/api/profiles/${p.getString("id")}/secure-boot",quiet=true){text->p.put("secure_boot",JSONObject(text))}
-        if(p.optJSONObject("secure_boot")?.optBoolean("eligible")==true)panel.addView(Button(this).apply{text=t("安全启动支持","Secure Boot support");setOnClickListener{secureBootSettings(p.getString("id"))}})
-        field("名称",p.optString("name"));field("架构",p.optString("architecture"));field("类型",p.optString("kind"));field("镜像文件",p.optString("media"));field("目录",p.optString("root"))
-        p.optJSONObject("boot_evidence")?.let{e->field("入口",e.optString("entry"));field("启动配置",e.optString("config"));field("内核",e.optString("kernel"));field("Initrd",e.optString("initrd"));field("安装源",tr(when(e.optString("source")){"http-tree"->"HTTP 安装树";"http-iso"->"HTTP 原盘";"nfs-tree"->"只读 NFS 文件树";"nbd"->"只读 NBD 原盘";"external"->"外部安装源";"local-media"->"需要本地介质";else->"未识别安装源"}));e.optJSONArray("diagnostics")?.each{d->if(d.optString("code") !in setOf("BOOT_CONFIG_FAMILY_LAYOUT","UOS_MANUAL_ONLY"))field(if(d.optString("code") in setOf("SOURCE_REQUIRED","SOURCE_UNVERIFIED"))"需要配置安装源" else "需要处理的问题",message(d.optString("detail")))}}
-        field("参数",p.optString("arguments"));p.optJSONObject("boot_files")?.let{files->field("启动文件映射",files.keys().asSequence().sorted().joinToString("\n"){"$it=${files.getString(it)}"})}
-        AlertDialog.Builder(this).setTitle(tr("镜像详情")).setView(ScrollView(this).apply{addView(panel)}).setPositiveButton(tr("关闭"),null).show()
-    }
-    private fun secureBootSettings(id:String){
-        request("/api/profiles/$id/secure-boot"){text->
-            val support=JSONObject(text)
-            if(!support.optBoolean("eligible"))return@request
-            val panel=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(24),dp(12),dp(24),dp(12))}
-            val toggle=Switch(this).apply{this.text=t("安全启动支持","Secure Boot support");isChecked=support.optBoolean("enabled");isEnabled=isChecked||support.optString("state")=="passed"};panel.addView(toggle)
-            panel.addView(TextView(this).apply{this.text=message(support.optString("detail")).ifBlank{t("尚未检查","Not checked")};setTextIsSelectable(true)})
-            val results=Button(this).apply{this.text=t("查看检查结果","View check results");setOnClickListener{val items=support.optJSONArray("components")?:JSONArray();val content=(0 until items.length()).joinToString("\n\n"){i->val c=items.getJSONObject(i);"${c.optString("file")}\n${c.optString("signer")}\n${c.optString("issuer")}\nSHA-256: ${c.optString("sha256")}\n${c.optString("certificate_sha256")}"};AlertDialog.Builder(this@MainActivity).setTitle(t("查看检查结果","View check results")).setMessage(content.ifBlank{message(support.optString("detail"))}).setPositiveButton(tr("关闭"),null).show()}};panel.addView(results)
-            val dialog=AlertDialog.Builder(this).setTitle(t("启动设置","Boot settings")).setView(ScrollView(this).apply{addView(panel)}).setNegativeButton(tr("关闭"),null).create()
-            fun lockControls(view:View){view.isEnabled=false;if(view is android.view.ViewGroup)for(i in 0 until view.childCount)lockControls(view.getChildAt(i))}
-            toggle.setOnCheckedChangeListener{_,enabled->lockControls(panel);request("/api/profiles/$id/secure-boot","PUT",JSONObject().put("enabled",enabled),failed={dialog.dismiss();secureBootSettings(id)}){dialog.dismiss();refresh();secureBootSettings(id)}}
 
-            if(support.optBoolean("enabled")){
-                panel.addView(TextView(this).apply{this.text=t("启动方式","Boot method")})
-                val modes=support.optJSONArray("modes")?:JSONArray().put("media-native")
-                fun label(mode:String)=if(mode=="signed-ipxe")t("iPXE shim（使用签名 iPXE 引导）","iPXE shim (signed iPXE)") else t("原生网络启动（使用镜像内组件）","Native network boot (image components)")
-                if(modes.length()>1){
-                    val group=RadioGroup(this)
-                    for(i in 0 until modes.length())group.addView(RadioButton(this).apply{this.id=i+1;this.text=label(modes.getString(i));isChecked=modes.getString(i)==support.optString("mode")})
-                    group.setOnCheckedChangeListener{_,choice->if(choice>0){lockControls(panel);request("/api/profiles/$id/secure-boot","PUT",JSONObject().put("enabled",true).put("mode",modes.getString(choice-1)),failed={dialog.dismiss();secureBootSettings(id)}){dialog.dismiss();refresh();secureBootSettings(id)}}}
-                    panel.addView(group)
-                }else panel.addView(TextView(this).apply{this.text=label(modes.optString(0))})
-                panel.addView(TextView(this).apply{this.text=t("对后续启动生效","Applies to subsequent boots")})
-            }
-            panel.addView(TextView(this).apply{this.text=t("实际启动取决于设备信任与镜像兼容性。","Booting depends on device trust and image compatibility.")})
-            panel.addView(Button(this).apply{this.text=t("重新检测","Check again");setOnClickListener{lockControls(panel);request("/api/profiles/$id/secure-boot/check","POST",JSONObject(),failed={dialog.dismiss();secureBootSettings(id)}){dialog.dismiss();secureBootSettings(id)}}})
-            dialog.show()
-        }
-    }
     private fun loadAutomationCapabilities(){
         snapshot.optJSONArray("profiles")?.each{p->val id=p.getString("id");val signature=endpoint+p.toString();if(capabilitySignatures[id]!=signature&&!capabilityRequests.contains(id)){
             capabilityRequests.add(id);automationCapabilities.remove(id)
@@ -365,15 +327,84 @@ class MainActivity : Activity() {
         val picker=Spinner(this);picker.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,names);for(i in 0 until profiles.length())if(profiles.getJSONObject(i).optString("id")==d.optString("profile_id"))picker.setSelection(i+1);panel.addView(picker)
         AlertDialog.Builder(this).setTitle(tr("设备")).setView(ScrollView(this).apply{addView(panel)}).setNegativeButton(tr("取消"),null).setPositiveButton(tr("保存")){_,_->if(inputs["mac"]?.text.isNullOrBlank()&&inputs["ip"]?.text.isNullOrBlank()){Toast.makeText(this,tr("至少填写 MAC 或 IP"),Toast.LENGTH_LONG).show();return@setPositiveButton};for((key,edit)in inputs)d.put(key,if(key=="ip"&&edit.text.isBlank())JSONObject.NULL else edit.text.toString());d.put("profile_id",if(picker.selectedItemPosition==0)JSONObject.NULL else profiles.getJSONObject(picker.selectedItemPosition-1).getString("id"));request("/api/devices","POST",d){refresh()}}.show()
     }
-    private fun profile(p:JSONObject){
-        val fields=listOf("名称" to p.optString("name"),"架构" to p.optString("architecture","arm64"),"类型" to p.optString("kind","linux"),"目录" to p.optString("root"),"内核" to p.optString("kernel"),"Initrd" to p.optString("initrd"),"DTB" to p.optString("dtb"),"参数" to p.optString("arguments"),"启动文件映射" to p.optJSONObject("boot_files")?.let{f->f.keys().asSequence().joinToString("\n"){"$it=${f.getString(it)}"}}.orEmpty())
-        dialog(tr("高级手动配置"),fields){v->val files=JSONObject();for(line in v["启动文件映射"].orEmpty().lines().filter{it.isNotBlank()}){val pair=line.split('=',limit=2);if(pair.size!=2){Toast.makeText(this,tr("请按 x64-efi=bootx64.efi 的格式填写，每行一项"),Toast.LENGTH_LONG).show();return@dialog};files.put(pair[0].trim(),pair[1].trim())};p.put("id",p.optString("id",java.util.UUID.randomUUID().toString())).put("name",v["名称"]).put("architecture",v["架构"]).put("kind",v["类型"]).put("root",v["目录"]).put("kernel",v["内核"]).put("initrd",v["Initrd"]).put("dtb",v["DTB"]).put("arguments",v["参数"]).put("boot_files",files);request("/api/profiles","POST",p){refresh()}}
+    private fun profile(original:JSONObject){
+        if(original.has("id")&&original.optJSONObject("secure_boot")?.optBoolean("eligible")==true){
+            request("/api/profiles/${original.getString("id")}/secure-boot"){text->val copy=JSONObject(original.toString());copy.put("secure_boot",JSONObject(text));profileForm(copy)}
+        } else profileForm(original)
+    }
+    private fun profileForm(original:JSONObject){
+        val p=JSONObject(original.toString())
+        val existing=p.has("id")
+        val support=p.optJSONObject("secure_boot")
+        val secured=support?.optBoolean("enabled")==true
+        val panel=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(24),dp(8),dp(24),dp(8))}
+        var targetPanel=panel
+        fun note(text:String){targetPanel.addView(TextView(this).apply{this.text=text;setTextIsSelectable(true);setTextColor(muted);setPadding(0,dp(10),0,0)})}
+        fun input(label:String,value:String,editable:Boolean=true,multiline:Boolean=false):EditText {
+            note(label)
+            return EditText(this).apply{setText(value);setTextColor(ink);isSingleLine=!multiline;isEnabled=editable;targetPanel.addView(this)}
+        }
+        val name=input(tr("名称"),p.optString("name"))
+        if(p.optString("media").isNotBlank())note(tr("镜像文件")+"\n"+p.optString("media"))
+        var parameterEditable=!existing
+        var parameterEnabled=secured
+        val parameterPanel=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;visibility=if(existing)View.GONE else View.VISIBLE};panel.addView(parameterPanel);targetPanel=parameterPanel
+        if(p.optString("kind")=="windows")note(t("Windows 参数示例：bootlog=on sos=on；多启动项使用 entry={GUID} 指定。","Windows options: bootlog=on sos=on; use entry={GUID} for multiple boot entries."))
+        val args=input(t("启动参数","Boot parameters"),p.optString("arguments"),true,true)
+        if(existing){
+            var importedArguments:String?=null
+            val reset=Button(this).apply{text=t("恢复导入时参数","Restore imported parameters");isEnabled=false;setOnClickListener{args.setText(importedArguments)}};parameterPanel.addView(reset)
+            val preview=EditText(this).apply{isFocusable=false;setTextIsSelectable(true);visibility=View.GONE;minLines=3}
+            parameterPanel.addView(Button(this).apply{text=t("查看参数预览","Preview parameters");setOnClickListener{val draft=JSONObject(p.toString()).put("arguments",args.text.toString());request("/api/profiles/${p.getString("id")}/parameters","POST",draft){text->preview.setText(JSONObject(text).optString("preview"));preview.visibility=View.VISIBLE}}});parameterPanel.addView(preview)
+            request("/api/profiles/${p.getString("id")}/parameters"){text->val info=JSONObject(text);importedArguments=if(info.isNull("original_arguments"))null else info.optString("original_arguments");reset.isEnabled=importedArguments!=null&&info.optBoolean("editable");parameterEditable=info.optBoolean("editable");parameterPanel.visibility=if(parameterEditable&&(p.optString("kind")!="windows-pe-iso"||parameterEnabled))View.VISIBLE else View.GONE;}
+        }
+        targetPanel=panel
+        var toggle:android.widget.Switch?=null
+        var picker:Spinner?=null
+        val modes=support?.optJSONArray("modes")?:JSONArray()
+        if(support?.optBoolean("eligible")==true){
+            toggle=android.widget.Switch(this).apply{text=t("安全启动支持","Secure Boot support");isChecked=secured;panel.addView(this)}
+            if(p.optString("kind")=="windows-pe-iso")toggle.setOnCheckedChangeListener{_,enabled->parameterEnabled=enabled;parameterPanel.visibility=if(parameterEditable&&enabled)View.VISIBLE else View.GONE}
+            picker=Spinner(this).apply{adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,(0 until modes.length()).map{if(modes.getString(it)=="signed-ipxe")"iPXE shim" else t("原生网络启动","Native network boot")});setSelection((0 until modes.length()).firstOrNull{modes.getString(it)==support.optString("mode")}?:0);panel.addView(this)}
+            note(message(support.optString("detail")))
+            support.optJSONArray("components")?.each{c->note(listOf("file","signer","issuer","sha256","certificate_sha256").joinToString("\n"){c.optString(it)})}
+        }
+        val advanced=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;visibility=if(existing)View.GONE else View.VISIBLE}
+        panel.addView(Button(this).apply{text=t("高级设置","Advanced settings");setOnClickListener{advanced.visibility=if(advanced.visibility==View.VISIBLE)View.GONE else View.VISIBLE}})
+        val fields=linkedMapOf<String,EditText>()
+        for((key,label,default)in listOf(Triple("architecture",tr("架构"),"arm64"),Triple("kind",tr("类型"),"linux"),Triple("root",tr("目录"),""),Triple("kernel",tr("内核"),""),Triple("initrd","Initrd",""),Triple("dtb","DTB",""))){
+            advanced.addView(TextView(this).apply{text=label;setTextColor(muted)})
+            val edit=EditText(this).apply{setText(p.optString(key,default));isEnabled=!secured;setTextColor(ink)};advanced.addView(edit);fields[key]=edit
+        }
+        advanced.addView(TextView(this).apply{text=tr("启动文件映射");setTextColor(muted)})
+        val mapping=EditText(this).apply{setText(p.optJSONObject("boot_files")?.let{f->f.keys().asSequence().sorted().joinToString("\n"){"$it=${f.getString(it)}"}}.orEmpty());isEnabled=!secured;minLines=3};advanced.addView(mapping);panel.addView(advanced)
+        p.optJSONObject("boot_evidence")?.let{e->
+            note(t("识别与检查结果","Detection and check results"))
+            for((key,label)in listOf("config" to tr("启动配置"),"entry" to tr("入口"),"kernel" to tr("内核"),"initrd" to "Initrd"))if(e.optString(key).isNotBlank())note(label+"\n"+e.optString(key))
+            val source=when(e.optString("source")){"http-tree"->"HTTP 安装树";"http-iso"->"HTTP 原盘";"nfs-tree"->"只读 NFS 文件树";"nbd"->"只读 NBD 原盘";"external"->"外部安装源";"local-media"->"需要本地介质";else->"未识别安装源"};note(tr("安装源")+"\n"+tr(source))
+            e.optJSONArray("diagnostics")?.each{d->if(d.optString("code") !in setOf("BOOT_CONFIG_FAMILY_LAYOUT","UOS_MANUAL_ONLY"))note(tr("需要处理的问题")+"\n"+message(d.optString("detail")))}
+        }
+        val dialog=AlertDialog.Builder(this).setTitle(t("镜像设置","Image settings")).setView(ScrollView(this).apply{addView(panel)}).setNegativeButton(tr("取消"),null).setPositiveButton(tr("保存"),null).create()
+        dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
+            val files=JSONObject()
+            for(line in mapping.text.toString().lines().filter{it.isNotBlank()}){
+                val pair=line.split('=',limit=2)
+                if(pair.size!=2||pair[0].isBlank()||pair[1].isBlank()||files.has(pair[0].trim())){mapping.error=tr("请按 x64-efi=bootx64.efi 的格式填写，每行一项");return@setOnClickListener}
+                files.put(pair[0].trim(),pair[1].trim())
+            }
+            p.put("id",p.optString("id",java.util.UUID.randomUUID().toString())).put("name",name.text.toString()).put("arguments",args.text.toString()).put("boot_files",files)
+            for((key,edit)in fields)p.put(key,edit.text.toString())
+            val body=if(existing)JSONObject().put("profile",p).put("secure_boot",if(toggle==null)JSONObject.NULL else JSONObject().put("enabled",toggle!!.isChecked).put("mode",if(modes.length()>0)modes.getString(picker!!.selectedItemPosition) else JSONObject.NULL)) else p
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled=false
+            request(if(existing)"/api/profiles/${p.getString("id")}/settings" else "/api/profiles",if(existing)"PUT" else "POST",body,failed={dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled=true}){dialog.dismiss();refresh()}
+        }}
+        dialog.show()
     }
     private fun profileMenu(p:JSONObject){
-        val labels=arrayOf(tr("编辑"),tr("自动安装配置"),tr("镜像详情"),tr("启动方式"),tr("删除"))
-        itemMenu(p.optString("name"),labels,booleanArrayOf(true,automationSupported(p.optString("id")),true,true,true)){index->when(index){0->profile(p);1->chooseAutomation("profile",p.getString("id"));2->imageDetails(p);3->manual(p);4->request("/api/profiles/${p.getString("id")}","DELETE"){refresh()}}}
+        val labels=arrayOf(t("镜像设置","Image settings"),tr("自动安装配置"),tr("启动方式"),tr("删除"))
+        itemMenu(p.optString("name"),labels,booleanArrayOf(true,automationSupported(p.optString("id")),true,true)){index->when(index){0->profile(p);1->chooseAutomation("profile",p.getString("id"));2->manual(p);3->request("/api/profiles/${p.getString("id")}","DELETE"){refresh()}}}
     }
-    private val firmwareKeys=setOf("x86-bios","ia64","ia32-efi","x64-efi","ebc-efi","alpha","powerpc-of","powerpc-epapr","power-opal","arm32-efi","arm64-efi","ia32-http","x64-http","arm32-http","arm64-http","arm32-uboot","arm64-uboot","riscv32-efi","riscv64-http","loongarch64-efi","riscv64-efi","hp-rmp")
+    private val firmwareKeys=setOf("x86-bios","ia64","ia32-efi","x64-efi","ebc-efi","alpha","sparc64","powerpc-of","powerpc-epapr","power-opal","arm32-efi","arm64-efi","ia32-http","x64-http","arm32-http","arm64-http","arm32-uboot","arm64-uboot","riscv32-efi","riscv64-http","loongarch64-efi","riscv64-efi","hp-rmp")
     private fun architectureDefaults(){
         content.addView(TextView(this).apply{text=tr("架构默认启动镜像");setTextColor(ink);textSize=18f})
         val defaults=snapshot.optJSONObject("default_profiles")?:JSONObject()

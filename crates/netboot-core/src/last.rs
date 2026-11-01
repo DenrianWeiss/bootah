@@ -30,19 +30,19 @@ fn string<'a>(b: &'a [u8], p: &mut usize) -> Option<&'a [u8]> {
     *p += n;
     Some(value)
 }
-fn frame(server: [u8; 6], client: [u8; 6], kind: u8, circuit: u16, body: &[u8]) -> Vec<u8> {
+fn frame(server: [u8; 6], client: [u8; 6], kind: u8, circuit: u16, body: &[u8], checksum: bool) -> Vec<u8> {
     let mut message = Vec::new();
     short(&mut message, (16 + body.len()) as u16);
-    message.extend([kind, 1]);
+    message.extend([kind, u8::from(checksum)]);
     short(&mut message, circuit);
     message.extend(server);
     message.extend([0; 4]);
     message.extend(body);
-    message.resize(message.len().div_ceil(4) * 4, 0);
-    let sum = message
-        .chunks_exact(4)
-        .fold(0u32, |n, b| n.wrapping_add(long(b, 0)));
-    number(&mut message, sum);
+    if checksum {
+        message.resize(message.len().div_ceil(4) * 4, 0);
+        let sum = message.chunks_exact(4).fold(0u32, |n, b| n.wrapping_add(long(b, 0)));
+        number(&mut message, sum);
+    }
     let mut out = Vec::from(client);
     out.extend(server);
     out.extend([0x80, 0x41]);
@@ -89,6 +89,8 @@ struct Association {
 }
 struct Circuit {
     peer: u16,
+    checksum: bool,
+    datagram: u16,
     touched: Instant,
     association: Option<Association>,
 }
@@ -200,7 +202,7 @@ impl Server {
                     "LAD",
                     "Offered read-only NETBOOT media",
                 );
-                Some(frame(server, client, 7, 0, &body))
+                Some(frame(server, client, 7, 0, &body, false))
             }
             1 => {
                 if size < 49
@@ -217,6 +219,8 @@ impl Server {
                     client,
                     Circuit {
                         peer,
+                        checksum: word(message, 18) & 2 != 0,
+                        datagram: word(message, 20).clamp(512, 1492),
                         touched: Instant::now(),
                         association: None,
                     },
@@ -233,7 +237,7 @@ impl Server {
                 body.push(SERVICE.len() as u8);
                 body.extend(SERVICE);
                 body.resize(33, 0);
-                Some(frame(server, client, 2, peer, &body))
+                Some(frame(server, client, 2, peer, &body, word(message, 18) & 2 != 0))
             }
             3 => {
                 self.circuits.remove(&client);
@@ -244,6 +248,7 @@ impl Server {
                     return None;
                 }
                 let circuit = self.circuits.get_mut(&client)?;
+                if circuit.checksum && payload[3] & 1 == 0 { return None; }
                 circuit.touched = Instant::now();
                 let reference = &message[20..24];
                 match message[16] {
@@ -268,7 +273,9 @@ impl Server {
                         if !instance.eq_ignore_ascii_case(SERVICE) || word(request, 12) & 4 != 0 {
                             return None;
                         }
-                        let segment = usize::from(word(message, 28)).clamp(256, 1400);
+                        let limit = usize::from(circuit.datagram).saturating_sub(39).min(1400);
+                        let requested = usize::from(word(message, 28));
+                        let segment = if requested == 0 { limit } else { requested.min(limit) };
                         let peer = word(message, 24);
                         let mut body = run(3, peer, reference);
                         short(&mut body, 1);
@@ -289,7 +296,7 @@ impl Server {
                             "LAD",
                             "Opened read-only NETBOOT media",
                         );
-                        Some(frame(server, client, 0, circuit.peer, &body))
+                        Some(frame(server, client, 0, circuit.peer, &body, circuit.checksum))
                     }
                     0 => {
                         let association = circuit.association.as_mut()?;
@@ -354,7 +361,7 @@ impl Server {
                             short(&mut body, part.len() as u16);
                             body.extend(part);
                             self.pending
-                                .push_back(frame(server, client, 0, circuit.peer, &body));
+                                .push_back(frame(server, client, 0, circuit.peer, &body, circuit.checksum));
                         }
                         self.pending.pop_front()
                     }
@@ -362,12 +369,26 @@ impl Server {
                         let association = circuit.association.take()?;
                         let mut body = run(7, association.peer, reference);
                         short(&mut body, 4);
-                        Some(frame(server, client, 0, circuit.peer, &body))
+                        Some(frame(server, client, 0, circuit.peer, &body, circuit.checksum))
                     }
                     _ => None,
                 }
             }
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn optional_checksum_matches_lastport_appendix_a() {
+        let server = [2, 0, 0, 0, 0, 1];
+        let plain = frame(server, [8; 6], 0, 1, &[1, 2, 3], false);
+        assert_eq!(&plain[14..18], &[19, 0, 0, 0]);
+        let checked = frame(server, [8; 6], 0, 1, &[1, 2, 3], true);
+        assert_eq!(&checked[14..18], &[19, 0, 0, 1]);
+        assert_eq!(&checked[34..38], &[0x15, 0x02, 0x05, 0x02]);
     }
 }

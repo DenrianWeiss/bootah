@@ -68,7 +68,7 @@ pub fn prepare(
     let overlay = cache.join("overlay");
     let client = overlay.join("usr/bin/bootah-media");
     fs::create_dir_all(client.parent().unwrap()).map_err(err)?;
-    fs::copy(crate::linux_compat::client(architecture)?, &client).map_err(err)?;
+    fs::copy(crate::linux_compat::client_for_initrd(original, architecture)?, &client).map_err(err)?;
     let hook = overlay
         .join(hooks)
         .join("initqueue/online/05-bootah-media.sh");

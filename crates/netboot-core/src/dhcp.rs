@@ -48,6 +48,21 @@ fn address(bytes: &[u8]) -> Ipv4Addr {
 fn usable(ip: Ipv4Addr) -> bool {
     !ip.is_unspecified() && !ip.is_broadcast() && !ip.is_multicast() && ip.octets()[0] != 0
 }
+pub(crate) fn available_ip(store: &Store) -> Option<Ipv4Addr> {
+    available_ip_excluding(store, &[])
+}
+pub(crate) fn available_ip_excluding(store: &Store, excluded: &[Ipv4Addr]) -> Option<Ipv4Addr> {
+    let settings = &store.config.settings;
+    let start = u32::from(settings.pool_start);
+    let end = u32::from(settings.pool_end);
+    if end < start || end - start > 65535 { return None; }
+    (start..=end).map(Ipv4Addr::from).find(|ip| {
+        usable(*ip) && *ip != settings.server_ip
+            && !excluded.contains(ip)
+            && !store.config.devices.iter().any(|d| d.ip == Some(*ip))
+            && !store.boot_addresses.get(ip).is_some_and(|(_, until)| *until > now())
+    })
+}
 impl<'a> Request<'a> {
     pub fn option(&self, code: u8) -> Option<&[u8]> {
         self.options.get(&code).map(Vec::as_slice)
@@ -60,6 +75,30 @@ impl<'a> Request<'a> {
     }
     fn pxe(&self) -> bool {
         self.vendor.starts_with("PXEClient")
+    }
+    fn obp_stage2(&self) -> bool {
+        if !self.pxe() || !self.architectures.is_empty() { return false; }
+        let mut classes = self.option(77).unwrap_or_default();
+        let mut found = false;
+        while let Some((&size, rest)) = classes.split_first() {
+            if size == 0 || rest.len() < usize::from(size) { return false; }
+            let (value, tail) = rest.split_at(usize::from(size));
+            found |= value == b"Bootah-OBP/1";
+            classes = tail;
+        }
+        found
+    }
+    fn srm_stage2(&self) -> bool {
+        if !self.pxe() || !self.architectures.contains(&3) { return false; }
+        let mut classes = self.option(77).unwrap_or_default();
+        let mut found = false;
+        while let Some((&size, rest)) = classes.split_first() {
+            if size == 0 || rest.len() < usize::from(size) { return false; }
+            let (value, tail) = rest.split_at(usize::from(size));
+            found |= value == b"Bootah-SRM";
+            classes = tail;
+        }
+        found
     }
     pub fn parse(bytes: &'a [u8]) -> Option<Self> {
         if bytes.len() < 236 || bytes[0] != 1 || bytes[1] != 1 || bytes[2] != 6 {
@@ -208,12 +247,12 @@ pub fn reply(state: &Shared, req: &Request<'_>, boot_port: bool) -> Option<Reply
     } else {
         None
     };
-    if let Some(ip) = claimed_ip.filter(|ip| *ip != settings.server_ip) {
+    if let Some(ip) = claimed_ip.filter(|ip| *ip != settings.server_ip && !req.obp_stage2()) {
         if !store.reconcile_ip_identity(&req.mac, ip) {
             return None;
         }
     }
-    if (proxy
+    if !req.obp_stage2() && (proxy
         || store
             .config
             .devices
@@ -267,6 +306,10 @@ pub fn reply(state: &Shared, req: &Request<'_>, boot_port: bool) -> Option<Reply
                     }))
         })
         .or_else(|| req.architectures.first().copied());
+    if req.obp_stage2() {
+        if !store.reconcile_architecture(idx, "sparc64", claimed_ip) { return None; }
+        store.config.devices[idx].architecture = "sparc64".into();
+    }
     if let Some(code) = selected {
         let detected = architecture(code);
         if !store.reconcile_architecture(idx, detected, claimed_ip) {
@@ -292,7 +335,12 @@ pub fn reply(state: &Shared, req: &Request<'_>, boot_port: bool) -> Option<Reply
     let file = profile
         .as_ref()
         .map(|p| {
-            if (req.vendor.starts_with("NetBSD:i386:") || req.vendor.starts_with("NetBSD:amd64:")) && p.kind == "bsd" {
+            if req.obp_stage2() {
+                crate::sparc_obp::next_file(p).unwrap_or_default()
+            } else if req.srm_stage2() {
+                if crate::alpha_srm::enabled(p) { "bootah-srm.cfg".to_string() }
+                else { String::new() }
+            } else if (req.vendor.starts_with("NetBSD:i386:") || req.vendor.starts_with("NetBSD:amd64:")) && p.kind == "bsd" {
                 let raw = req.option(67).unwrap_or(&req.bytes[108..236]);
                 let requested =
                     std::str::from_utf8(raw.split(|b| *b == 0).next().unwrap_or_default())
@@ -341,7 +389,7 @@ pub fn reply(state: &Shared, req: &Request<'_>, boot_port: bool) -> Option<Reply
     }
     // iPXE EFI need not implement the legacy PXE menu API. Ask it to query
     // ProxyDHCP on 4011 before supplying its script (PXE 2.1 section 2.2.3).
-    let proxy_redirect = proxy && req.ipxe && !boot_service;
+    let proxy_redirect = proxy && (req.ipxe || req.obp_stage2()) && !boot_service;
     let current = req.current();
     let ip = if proxy && !boot_service {
         Ipv4Addr::UNSPECIFIED
@@ -358,7 +406,12 @@ pub fn reply(state: &Shared, req: &Request<'_>, boot_port: bool) -> Option<Reply
         {
             return None;
         }
-        if proxy {
+        if proxy && req.obp_stage2() {
+            if store.boot_addresses.get(&current).is_some_and(|(mac, expiry)| mac != &req.mac && *expiry > now()) { return None; }
+            let expiry = now() + 3600;
+            store.boot_addresses.retain(|_, (mac, until)| mac != &req.mac && *until > now());
+            store.boot_addresses.insert(current, (req.mac.clone(), expiry));
+        } else if proxy {
             store.config.devices[idx].ip = Some(current);
         } else if store.config.devices[idx].ip != Some(current) {
             return None;
@@ -367,16 +420,7 @@ pub fn reply(state: &Shared, req: &Request<'_>, boot_port: bool) -> Option<Reply
     } else if let Some(ip) = store.config.devices[idx].ip {
         ip
     } else {
-        let start = u32::from(settings.pool_start);
-        let end = u32::from(settings.pool_end);
-        if end < start || end - start > 65535 {
-            return None;
-        }
-        let ip = (start..=end).map(Ipv4Addr::from).find(|ip| {
-            usable(*ip)
-                && *ip != settings.server_ip
-                && !store.config.devices.iter().any(|d| d.ip == Some(*ip))
-        })?;
+        let ip = available_ip(&store)?;
         store.config.devices[idx].ip = Some(ip);
         ip
     };
@@ -519,8 +563,8 @@ pub async fn run(state: Shared, socket: UdpSocket, boot_port: bool) -> Result<()
             .recv_from(&mut data)
             .await
             .map_err(|e| e.to_string())?;
-        // Keep DHCP/PXE ports bound in raw mode so the host does not send ICMP port-unreachable.
-        if raw_handles {
+        // Ethernet captures DHCP requests and uses the shared socket to reply. BINL retains its raw path.
+        if raw_handles && (!boot_port || data[..size].starts_with(b"\x81NCQ")) {
             continue;
         }
         if boot_port
@@ -597,6 +641,165 @@ mod association_tests {
         assert_eq!(s.config.devices[0].ip, Some("192.0.2.11".parse().unwrap()));
         assert_eq!(s.config.devices[0].profile_id.as_deref(), Some("installer"));
         drop(s);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod srm_stage2_tests {
+    use super::*;
+    fn packet(message: u8, class: Option<&[u8]>, current: [u8; 4]) -> Vec<u8> {
+        let mut b = vec![0; 240];
+        b[..3].copy_from_slice(&[1, 1, 6]);
+        b[12..16].copy_from_slice(&current);
+        b[28..34].copy_from_slice(&[8, 0, 43, 229, 64, 0]);
+        b[236..240].copy_from_slice(&[99, 130, 83, 99]);
+        if message != 0 {
+            add(&mut b, 53, &[message]);
+            add(&mut b, 60, b"PXEClient:Arch:00003");
+            add(&mut b, 93, &[0, 3]);
+            if let Some(class) = class { add(&mut b, 77, class); }
+        }
+        b.push(255);
+        b
+    }
+    fn filename(reply: Reply) -> String {
+        String::from_utf8(reply.bytes[108..236].split(|b| *b == 0).next().unwrap().to_vec()).unwrap()
+    }
+    #[test]
+    fn configuration_is_only_returned_to_identified_alpha_second_stage() {
+        let root = std::env::temp_dir().join(format!("bootah-srm-dhcp-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let state = Store::open(root.join("state.json")).unwrap();
+        {
+            let mut s = state.lock().unwrap();
+            s.config.settings.server_ip = "192.0.2.1".parse().unwrap();
+            s.config.settings.dhcp_enabled = true;
+            s.config.devices.push(Device {id:"08002be54000".into(), mac:"08:00:2b:e5:40:00".into(), ip:Some("192.0.2.100".parse().unwrap()), profile_id:Some("alpha".into()), ..Default::default()});
+            s.config.profiles.push(serde_json::from_value(serde_json::json!({"id":"alpha","name":"Alpha","architecture":"alpha","kind":"linux","root":root,"boot_files":{"default":"bootah-srm.bin"}})).unwrap());
+        }
+        let first = packet(0, None, [0;4]);
+        assert_eq!(filename(reply(&state, &Request::parse(&first).unwrap(), false).unwrap()), "bootah-srm.bin");
+        {
+            let mut s = state.lock().unwrap();
+            s.config.settings.dhcp_enabled = false;
+            s.config.settings.proxy_dhcp_enabled = true;
+        }
+        let second = packet(1, Some(b"\x0aBootah-SRM"), [0;4]);
+        assert_eq!(filename(reply(&state, &Request::parse(&second).unwrap(), false).unwrap()), "bootah-srm.cfg");
+        let discover = packet(3, Some(b"\x0aBootah-SRM"), [192,0,2,120]);
+        assert_eq!(filename(reply(&state, &Request::parse(&discover).unwrap(), true).unwrap()), "bootah-srm.cfg");
+        for class in [b"\x09Bootah-SRM".as_slice(), b"\x0aOtherClass".as_slice()] {
+            let other = packet(1, Some(class), [0;4]);
+            assert_eq!(filename(reply(&state, &Request::parse(&other).unwrap(), false).unwrap()), "bootah-srm.bin");
+        }
+        {
+            let mut s = state.lock().unwrap();
+            s.config.settings.dhcp_enabled = true;
+            s.config.settings.proxy_dhcp_enabled = false;
+        }
+        assert_eq!(filename(reply(&state, &Request::parse(&first).unwrap(), false).unwrap()), "bootah-srm.bin");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod obp_tests {
+    use super::*;
+    fn request(message: u8, stage: bool, ip: [u8; 4]) -> Vec<u8> {
+        let mut b = vec![0; 240]; b[..3].copy_from_slice(&[1,1,6]);
+        b[12..16].copy_from_slice(&ip); b[28..34].copy_from_slice(&[8,0,32,1,2,3]);
+        b[236..240].copy_from_slice(&[99,130,83,99]);
+        add(&mut b, 53, &[message]); add(&mut b, 60, b"PXEClient");
+        if stage { add(&mut b, 77, b"\x0cBootah-OBP/1"); }
+        b.push(255); b
+    }
+    #[tokio::test]
+    async fn obp_boot_service_uses_udp_with_ethernet_enabled() {
+        let root=std::env::temp_dir().join(format!("bootah-obp-udp-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(".bootah-openbsd-nfs.json"),br#"{"version":1,"profile":"sparc"}"#).unwrap();
+        let mut loader=vec![0;64];loader[..7].copy_from_slice(b"\x7fELF\x02\x02\x01");loader[19]=43;
+        std::fs::write(root.join("ofwboot.net"),loader).unwrap();
+        let state=Store::open(root.join("state.json")).unwrap();
+        let server=UdpSocket::bind("127.0.0.1:0").await.unwrap();let target=server.local_addr().unwrap();
+        {
+            let mut s=state.lock().unwrap();
+            s.config.settings.server_ip="127.0.0.2".parse().unwrap();
+            s.config.settings.ethernet_enabled=true;s.config.settings.dhcp_enabled=false;s.config.settings.proxy_dhcp_enabled=true;
+            s.config.settings.pxe_port=target.port();
+            s.config.devices.push(Device{id:"080020010203".into(),mac:"08:00:20:01:02:03".into(),architecture:"sparc64".into(),profile_id:Some("sparc".into()),..Default::default()});
+            s.config.profiles.push(serde_json::from_value(serde_json::json!({"id":"sparc","name":"SPARC","system_id":"openbsd","architecture":"sparc64","kind":"bsd","kernel":"bsd.rd","root":root,"boot_files":{"default":"bootah-obp.bin","sparc64_native":"ofwboot.net"}})).unwrap());
+        }
+        let client=UdpSocket::bind("127.0.0.1:0").await.unwrap();let source=client.local_addr().unwrap();
+        let mut bytes=request(3,true,[127,0,0,1]);bytes.pop();add(&mut bytes,54,&[127,0,0,2]);add(&mut bytes,43,&[71,4,0,0,0,0,255]);bytes.push(255);
+        let mut frame=vec![0;42];frame[..6].copy_from_slice(&[2,0,0,0,0,1]);frame[6..12].copy_from_slice(&[8,0,32,1,2,3]);frame[12..15].copy_from_slice(&[8,0,0x45]);frame[23]=17;
+        frame[16..18].copy_from_slice(&((bytes.len()+28) as u16).to_be_bytes());frame[22]=64;
+        frame[26..30].copy_from_slice(&[127,0,0,1]);frame[30..34].copy_from_slice(&[127,0,0,2]);
+        frame[34..36].copy_from_slice(&source.port().to_be_bytes());frame[36..38].copy_from_slice(&target.port().to_be_bytes());frame[38..40].copy_from_slice(&((bytes.len()+8) as u16).to_be_bytes());
+        let sum=frame[14..34].chunks_exact(2).map(|b|u32::from(u16::from_be_bytes([b[0],b[1]]))).sum::<u32>();let sum=(sum&65535)+(sum>>16);let sum=(sum&65535)+(sum>>16);frame[24..26].copy_from_slice(&(!(sum as u16)).to_be_bytes());frame.extend_from_slice(&bytes);
+        let mut ethernet=crate::raw::Ethernet::new(state.clone(),[2,0,0,0,0,1],false);
+        assert!(ethernet.handle(&frame).is_none());
+        let sender=std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let sender_address=sender.local_addr().unwrap();sender.set_nonblocking(true).unwrap();
+        ethernet.dhcp_socket=Some(sender);
+        frame[36..38].copy_from_slice(&67u16.to_be_bytes());
+        assert!(ethernet.handle(&frame).is_none());
+        let mut native=[0;2048];
+        let (n,from)=tokio::time::timeout(std::time::Duration::from_secs(1),client.recv_from(&mut native)).await.unwrap().unwrap();
+        assert_eq!(from,sender_address);assert_eq!(native[0],2);
+        assert_eq!(native[108..236].split(|b|*b==0).next().unwrap(),b"bootah-obp.cfg");
+        assert_eq!(n,300);
+        let task=tokio::spawn(run(state.clone(),server,true));
+        client.send_to(&bytes,target).await.unwrap();
+        let mut response=[0;2048];let (size,from)=tokio::time::timeout(std::time::Duration::from_secs(1),client.recv_from(&mut response)).await.unwrap().unwrap();
+        assert_eq!(from,target);assert_eq!(response[0],2);assert_eq!(&response[16..20],&[127,0,0,1]);
+        assert_eq!(response[108..236].split(|b|*b==0).next().unwrap(),b"bootah-obp.cfg");
+        response[0]=1;let ack=Request::parse(&response[..size]).unwrap();assert_eq!(ack.message,5);assert_eq!(ack.server,Some("127.0.0.2".parse().unwrap()));
+        task.abort();let _=task.await;std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn obp_stage_routes_grub_and_preserves_rarp_address() {
+        let root = std::env::temp_dir().join(format!("bootah-obp-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut grub = vec![0u8; 64];
+        for (at, word) in [(0, 0x01030107u32), (4, 32), (20, 0x4400), (32, 0x10800003), (36, 0x9010000c)] {
+            grub[at..at+4].copy_from_slice(&word.to_be_bytes());
+        }
+        std::fs::write(root.join("grub.img"), grub).unwrap();
+        let state = Store::open(root.join("state.json")).unwrap();
+        {
+            let mut s = state.lock().unwrap();
+            s.config.settings.server_ip = "192.0.2.1".parse().unwrap();
+            s.config.settings.dhcp_enabled = true;
+            s.config.devices.push(Device { id:"080020010203".into(), mac:"08:00:20:01:02:03".into(), architecture:"sparc64".into(), ip:Some("192.0.2.100".parse().unwrap()), profile_id:Some("sparc".into()), ..Default::default() });
+            s.config.profiles.push(serde_json::from_value(serde_json::json!({"id":"sparc","name":"SPARC","architecture":"sparc64","kind":"linux","root":root,"boot_files":{"default":"bootah-obp.bin","sparc64":"bootah-obp.bin","sparc64_grub":"grub.img"}})).unwrap());
+        }
+        let file = |r: Reply| String::from_utf8(r.bytes[108..236].split(|b| *b == 0).next().unwrap().to_vec()).unwrap();
+        let first = request(1, false, [0;4]);
+        assert_eq!(file(reply(&state, &Request::parse(&first).unwrap(), false).unwrap()), "bootah-obp.bin");
+        let stage = request(1, true, [0;4]);
+        assert!(Request::parse(&stage).unwrap().obp_stage2());
+        let mut wrong_arch = stage[..stage.len()-1].to_vec();
+        add(&mut wrong_arch, 93, &[0, 2]); wrong_arch.push(255);
+        assert!(!Request::parse(&wrong_arch).unwrap().obp_stage2());
+        let mut malformed = stage.clone();
+        let class = malformed.windows(2).position(|v| v == [77, 13]).unwrap();
+        malformed[class + 2] = 11;
+        assert!(!Request::parse(&malformed).unwrap().obp_stage2());
+        assert_eq!(file(reply(&state, &Request::parse(&stage).unwrap(), false).unwrap()), "grub.img");
+        { let mut s = state.lock().unwrap(); s.config.settings.dhcp_enabled = false; s.config.settings.proxy_dhcp_enabled = true; }
+        let offer = reply(&state, &Request::parse(&stage).unwrap(), false).unwrap();
+        assert_eq!(&offer.bytes[16..20], &[0,0,0,0]);
+        let boot = request(3, true, [192,0,2,120]);
+        assert_eq!(file(reply(&state, &Request::parse(&boot).unwrap(), true).unwrap()), "grub.img");
+        {
+            let mut s = state.lock().unwrap();
+            assert_eq!(s.config.devices[0].ip, Some("192.0.2.100".parse().unwrap()));
+            assert_eq!(s.profile_for("192.0.2.120".parse().unwrap()).unwrap().id, "sparc");
+            s.config.profiles[0].boot_files.insert("sparc64_grub".into(), "bootah-obp.bin".into());
+        }
+        assert!(reply(&state, &Request::parse(&stage).unwrap(), false).is_none());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

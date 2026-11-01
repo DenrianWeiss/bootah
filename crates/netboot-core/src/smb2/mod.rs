@@ -1324,7 +1324,7 @@ mod tests {
         for id in ["allowed", "other"] {
             config.profiles.push(serde_json::from_value(serde_json::json!({"id":id,"name":id,"architecture":"x64","kind":"windows","root":root})).unwrap());
         }
-        Arc::new(Mutex::new(Store {
+        Arc::new(Mutex::new(Store { portmap_sender: Default::default(), boot_addresses: Default::default(),
             config,
             events: vec![],
             path: root.join("unused-state"),

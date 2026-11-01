@@ -453,14 +453,16 @@ impl Manager {
         let tftp_socket = crate::privilege::udp((s.bind_ip, s.tftp_port))
             .await
             .map_err(|e| format!("TFTP: {e}"))?;
-        let dhcp_socket = if s.dhcp_enabled || s.proxy_dhcp_enabled {
+        let (dhcp_socket, dhcp_sender) = if s.dhcp_enabled || s.proxy_dhcp_enabled {
             let socket = crate::privilege::udp((s.bind_ip, s.dhcp_port))
                 .await
                 .map_err(|e| format!("DHCP: {e}"))?;
             socket.set_broadcast(true).map_err(|e| e.to_string())?;
-            Some(socket)
+            let socket = socket.into_std().map_err(|e| format!("DHCP: {e}"))?;
+            let sender = if s.ethernet_enabled { Some(socket.try_clone().map_err(|e| format!("DHCP: {e}"))?) } else { None };
+            (Some(tokio::net::UdpSocket::from_std(socket).map_err(|e| format!("DHCP: {e}"))?), sender)
         } else {
-            None
+            (None, None)
         };
         let pxe_socket = if s.dhcp_enabled || s.proxy_dhcp_enabled {
             let socket = crate::privilege::udp((s.bind_ip, s.pxe_port))
@@ -474,7 +476,7 @@ impl Manager {
         let raw_task = if s.ethernet_enabled {
             self.raw_stop
                 .store(false, std::sync::atomic::Ordering::Relaxed);
-            Some(raw::start(self.state.clone(), self.raw_stop.clone()).await?)
+            Some(raw::start(self.state.clone(), self.raw_stop.clone(), dhcp_sender).await?)
         } else {
             None
         };
@@ -1585,7 +1587,7 @@ mod smb_lifecycle_tests {
         let mut config = Config::default();
         config.settings.bind_ip = std::net::Ipv4Addr::LOCALHOST;
         config.settings.ris_smb_port = busy.local_addr().unwrap().port();
-        let state = Arc::new(Mutex::new(Store { config, events: vec![], path: root.join("state.json") }));
+        let state = Arc::new(Mutex::new(Store { portmap_sender: Default::default(), boot_addresses: Default::default(), config, events: vec![], path: root.join("state.json") }));
         let manager = Manager::new(state);
         manager.tasks.lock().unwrap().push(tokio::spawn(std::future::pending()));
         let error = manager.switch_smb("smb2".into(), false, None).await.unwrap_err();
@@ -1600,7 +1602,7 @@ mod smb_lifecycle_tests {
     async fn switching_requires_current_confirmation_and_closes_sessions() {
         let root = std::env::temp_dir().join(format!("bootah-smb-switch-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
-        let state = Arc::new(Mutex::new(Store {
+        let state = Arc::new(Mutex::new(Store { portmap_sender: Default::default(), boot_addresses: Default::default(),
             config: Config::default(),
             events: vec![],
             path: root.join("state.json"),

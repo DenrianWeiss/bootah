@@ -10,30 +10,7 @@ use ratatui::{
 use serde_json::Value;
 use std::{io, net::Ipv4Addr, time::Duration};
 
-const FIRMWARE_KEYS: &[&str] = &[
-    "x86-bios",
-    "ia64",
-    "ia32-efi",
-    "x64-efi",
-    "ebc-efi",
-    "alpha",
-    "powerpc-of",
-    "powerpc-epapr",
-    "power-opal",
-    "arm32-efi",
-    "arm64-efi",
-    "ia32-http",
-    "x64-http",
-    "arm32-http",
-    "arm64-http",
-    "arm32-uboot",
-    "arm64-uboot",
-    "riscv32-efi",
-    "riscv64-http",
-    "loongarch64-efi",
-    "riscv64-efi",
-    "hp-rmp",
-];
+const FIRMWARE_KEYS: &[&str] = FIRMWARE_ARCHITECTURES;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page {
     Devices,

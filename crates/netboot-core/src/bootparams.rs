@@ -44,7 +44,7 @@ fn body(
     let store = state.lock().ok()?;
     let profile = store
         .profile_for(ip)
-        .filter(|p| p.kind == "solaris" && p.architecture == "sparc64")?;
+        .filter(|p| (p.kind == "solaris" && p.architecture == "sparc64") || crate::openbsd::network_root(p))?;
     let device = store.device_for(ip)?;
     let client = format!(
         "bootah-{}",
@@ -80,6 +80,7 @@ fn body(
             }
             let key = string(args, &mut pos, 32)?;
             let path = match key.as_str() {
+                "root" if crate::openbsd::network_root(&profile) => format!("/{}", profile.id),
                 "root" => format!("/{}/Solaris_10/Tools/Boot", profile.id),
                 "install" => format!("/{}", profile.id),
                 "rootopts" => rootopts.into(),
@@ -211,8 +212,7 @@ pub fn configured_port(state: &Shared) -> Result<Option<u16>, String> {
 }
 pub fn configured_port_for(config: &crate::model::Config) -> Result<Option<u16>, String> {
     let enabled = config.profiles.iter().any(|p| {
-        p.kind == "solaris"
-            && p.architecture == "sparc64"
+        ((p.kind == "solaris" && p.architecture == "sparc64") || crate::openbsd::network_root(p))
             && (config
                 .devices
                 .iter()

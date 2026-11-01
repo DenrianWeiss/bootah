@@ -81,8 +81,11 @@ pub(crate) fn binary_arch(path: &Path) -> Option<&'static str> {
             .ok()?;
         b = decoded;
     }
+    binary_arch_bytes(&b)
+}
+pub(crate) fn binary_arch_bytes(b: &[u8]) -> Option<&'static str> {
     if b.starts_with(b"MZ") {
-        let machine = crate::efi::pe_machine(&b)?;
+        let machine = crate::efi::pe_machine(b)?;
         return crate::efi::from_machine(machine)
             .map(|entry| entry.architecture)
             .or_else(|| (machine == 0x1c4).then_some("arm32"));
@@ -326,7 +329,11 @@ fn prepare_debian_release_aliases(root: &Path) -> Result<(), String> {
     Ok(())
 }
 pub fn import_with_options(source: &Path, library: &Path, trust_local_iso: bool, linux_compat: bool) -> Result<ImportResult, String> {
-    let result = import_inner(source, library, trust_local_iso, linux_compat)?;
+    let mut result = import_inner(source, library, trust_local_iso, linux_compat)?;
+    for profile in &mut result.profiles {
+        normalize_firmware_files(profile);
+        crate::sparc_obp::upgrade_native(profile);
+    }
     crate::boot_options::remember_defaults(&result.profiles)?;
     Ok(result)
 }
@@ -442,6 +449,9 @@ fn import_inner(
                 }
                 return Ok(result);
             }
+        }
+        if let Some(result) = crate::alpha_srm::import_iso(&source, &root, &id)? {
+            return Ok(result);
         }
         if let Some(result) =
             crate::linux_media::prepare(&source, &root, &id, trust_local_iso, linux_compat)?
@@ -745,6 +755,10 @@ fn import_inner(
                     note = "ELILO network boot configuration prepared".into();
                     informational_note = true;
                 }
+            } else if arch == "sparc64" && kind == "linux" {
+                crate::sparc_obp::prepare(&root, &mut boot_files)?;
+                note = "OpenBoot RARP → Bootah DHCP/ProxyDHCP → GRUB (hardware validation pending)".into();
+                informational_note = true;
             } else if matches!(arch.as_str(), "sparc" | "sparc64") {
                 boot_files.insert("default".into(), boot_kernel.clone());
                 note = "SPARC OpenBoot loads the ELF kernel over TFTP".into();

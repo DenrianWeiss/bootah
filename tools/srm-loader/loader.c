@@ -20,7 +20,8 @@ static u32 ip, server, netmask, gateway, xid;
 static u16 source_port = 20000, peer_port;
 static u8 peer_mac[6];
 static char device[256] ALIGNED, flags[256] ALIGNED;
-static u64 ticks_per_second, last_cycle, clock_ticks;
+static u64 ticks_per_second, last_cycle, clock_ticks, lease_started;
+static u32 lease_seconds;
 static u64 reserved_lo[512], reserved_hi[512];
 static unsigned reservations;
 struct memory_region {
@@ -333,6 +334,8 @@ static void udp(u32 destination, u16 port, const u8 *data, unsigned size,
   send_frame(42 + size);
 }
 static unsigned receive(void) {
+  if (lease_seconds && expired(lease_started, lease_seconds))
+    fail("DHCP lease expired before kernel handoff");
   u64 r = srm_call(0x13, channel, sizeof(rx), (u64)rx, 0);
   unsigned n = (u32)r;
   if ((r >> 63) || n > sizeof(rx) || n < 14)
@@ -407,7 +410,8 @@ static void resolve(void) {
   }
   fail("boot server ARP timed out");
 }
-static void network(void) {
+#include "dhcp.h"
+static void bootp_network(void) {
   static u8 request[300] ALIGNED;
   static const u8 broadcast[6] = {255, 255, 255, 255, 255, 255};
   memset(request, 0, sizeof(request));
@@ -466,6 +470,12 @@ static void network(void) {
     }
   }
   fail("BOOTP timed out; external DHCP must answer BOOTP or use a reservation");
+}
+static void network(void) {
+  if (!dhcp_network()) {
+    print("DHCP unavailable; trying legacy BOOTP\n");
+    bootp_network();
+  }
 }
 static u64 download(const char *name, u8 *destination, u64 capacity) {
   static u8 request[512] ALIGNED;
@@ -665,9 +675,16 @@ static void boot_linux(void) {
   if (initrd_size &&
       download(setting("initrd"), (u8 *)initrd, initrd_size) != initrd_size)
     fail("incomplete initrd");
-  char *args = flags[0] ? flags : setting("args");
-  if (length(args) > 255)
+  char args[256];
+  char *configured = setting("args");
+  unsigned base_length = length(configured), flag_length = length(flags);
+  unsigned separator = base_length && flag_length;
+  if (base_length + separator + flag_length > 255)
     fail("Linux command line exceeds 255 bytes");
+  memcpy(args, configured, base_length);
+  if (separator)
+    args[base_length] = ' ';
+  memcpy(args + base_length + separator, flags, flag_length + 1);
   print("Linux entry=");
   hex(entry);
   print(" initrd=");

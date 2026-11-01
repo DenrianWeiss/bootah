@@ -1,0 +1,8 @@
+*.elf
+*.raw
+*.bin
+.handoff-check
+
+.cpu-control/
+
+.properties-check

@@ -1,4 +1,6 @@
 use crate::{dhcp, model::*, tftp};
+#[path = "rarp.rs"]
+mod rarp;
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 use libloading::Library;
 use std::{
@@ -358,6 +360,16 @@ struct Transfer {
     port: u16,
     request: Vec<u8>,
     session: tftp::Session,
+    socket: Option<std::net::UdpSocket>,
+}
+fn transfer_packets(transfer: &Transfer, host: [u8; 6], server: std::net::Ipv4Addr, tid: u16) -> Result<Vec<Vec<u8>>, String> {
+    if let Some(socket) = &transfer.socket {
+        for packet in transfer.session.packets() {
+            socket.send_to(packet, (transfer.ip, transfer.port)).map_err(|e| e.to_string())?;
+        }
+        return Ok(Vec::new());
+    }
+    Ok(transfer.session.packets().map(|packet| datagram(host, transfer.mac, server, transfer.ip, tid, transfer.port, packet)).collect())
 }
 pub struct Ethernet {
     state: Shared,
@@ -371,6 +383,8 @@ pub struct Ethernet {
     mop: crate::mop::Server,
     last: crate::last::Server,
     pending_frames: Vec<Vec<u8>>,
+    rarp: rarp::Server,
+    pub(crate) dhcp_socket: Option<std::net::UdpSocket>,
 }
 impl Ethernet {
     pub fn new(state: Shared, server_mac: [u8; 6], virtual_wire: bool) -> Self {
@@ -394,11 +408,16 @@ impl Ethernet {
             mop: crate::mop::Server::default(),
             last: crate::last::Server::default(),
             pending_frames: Vec::new(),
+            rarp: rarp::Server::default(),
+            dhcp_socket: None,
         }
     }
     pub fn handle(&mut self, frame: &[u8]) -> Option<Vec<u8>> {
         if frame.len() < 14 || frame[6..12] == self.server_mac {
             return None;
+        }
+        if let Some(response) = self.rarp.receive(&self.state, self.server_mac, frame) {
+            return Some(response);
         }
         if frame[12..14] == [8, 6] {
             if self.host_mac.is_some() {
@@ -426,14 +445,37 @@ impl Ethernet {
                 ));
             }
             if (destination == 67
-                || destination == settings.pxe_port
-                || (self.virtual_wire && destination == 4011))
+                || (self.virtual_wire && (destination == settings.pxe_port || destination == 4011)))
                 && (settings.dhcp_enabled || settings.proxy_dhcp_enabled)
             {
                 return self.dhcp(frame);
             }
-            if self.virtual_wire && (destination == 69 || self.transfers.contains_key(&destination))
-            {
+            let target = std::net::Ipv4Addr::new(frame[30], frame[31], frame[32], frame[33]);
+            let mask = u32::from(settings.subnet);
+            let broadcast = target.is_broadcast() || (u32::from(target) | mask == u32::MAX
+                && u32::from(target) & mask == u32::from(settings.server_ip) & mask);
+            if !self.virtual_wire && broadcast && frame[..6] == [255; 6] {
+                let sender = {
+                    let store = self.state.lock().unwrap();
+                    store.portmap_sender.upgrade().filter(|socket| {
+                        socket.local_addr().is_ok_and(|a| !a.ip().is_unspecified() && a.port() == destination)
+                            && store.device_for(ip).is_some_and(|d| d.mac == mac(&frame[6..12]))
+                    })
+                };
+                if let Some(sender) = sender {
+                    if let Some(reply) = crate::bootparams::callit(&self.state, ip, data)
+                        && let Err(e) = sender.send_to(&reply, (ip, port)) {
+                        self.state.lock().unwrap().event(&ip.to_string(), "RPC", e.to_string());
+                    }
+                    return None;
+                }
+            }
+            let broadcast_request = broadcast && frame[..6] == [255; 6]
+                && destination == settings.tftp_port && data.starts_with(&[0, 1])
+                && self.state.lock().unwrap().device_for(ip).is_some_and(|d| d.mac == mac(&frame[6..12]));
+            if (self.virtual_wire && (destination == 69 || destination == settings.tftp_port))
+                || broadcast_request || (self.transfers.contains_key(&destination)
+                    && (self.virtual_wire || target == settings.server_ip)) {
                 let mut client_mac = [0; 6];
                 client_mac.copy_from_slice(&frame[6..12]);
                 return self.tftp(ip, port, destination, client_mac, data);
@@ -501,6 +543,10 @@ impl Ethernet {
             && ip != store.config.settings.server_ip
             && crate::network::usable(ip)
             && known_ip.is_some_and(|previous| previous != ip)
+            && !store.config.devices.iter().filter(|d| d.mac == mac).any(|d| {
+                let profile = d.profile_id.as_ref().or_else(|| store.config.default_profiles.get(&d.architecture));
+                store.config.profiles.iter().any(|p| Some(&p.id) == profile && crate::sparc_obp::enabled(p))
+            })
             && store.associate(ip, &mac)
         {
             if let Err(error) = store.save() {
@@ -517,19 +563,11 @@ impl Ethernet {
         data: &[u8],
     ) -> Option<Vec<u8>> {
         let server = self.state.lock().unwrap().config.settings.server_ip;
-        if destination == 69 {
-            if let Some((&tid, transfer)) = self.transfers.iter().find(|(_, t)| {
+        if destination == 69 || destination == self.state.lock().unwrap().config.settings.tftp_port {
+            if let Some((&tid, _)) = self.transfers.iter().find(|(_, t)| {
                 t.ip == ip && t.port == port && t.mac == client_mac && t.request == data
             }) {
-                return Some(datagram(
-                    self.server_mac,
-                    client_mac,
-                    server,
-                    ip,
-                    tid,
-                    port,
-                    &transfer.session.packet,
-                ));
+                return self.send_transfer(tid);
             }
             self.transfers.retain(|_, t| t.ip != ip || t.port != port);
             if self.transfers.len() >= 64 {
@@ -562,15 +600,16 @@ impl Ethernet {
                 tid = if tid == 60000 { 20000 } else { tid + 1 }
             }
             self.next_port = if tid == 60000 { 20000 } else { tid + 1 };
-            let out = datagram(
-                self.server_mac,
-                client_mac,
-                server,
-                ip,
-                tid,
-                port,
-                &session.packet,
-            );
+            // Reserve the live transfer port so ACKs do not trigger host ICMP errors.
+            let socket = if self.virtual_wire { None } else {
+                let bind = self.state.lock().unwrap().config.settings.bind_ip;
+                let socket = match std::net::UdpSocket::bind((bind, 0)).and_then(|s| { s.set_nonblocking(true)?; Ok(s) }) {
+                    Ok(s) => s,
+                    Err(e) => { self.state.lock().unwrap().event(&ip.to_string(), "TFTP", e.to_string()); return None; }
+                };
+                tid = socket.local_addr().ok()?.port();
+                Some(socket)
+            };
             self.transfers.insert(
                 tid,
                 Transfer {
@@ -579,9 +618,10 @@ impl Ethernet {
                     request: data.to_vec(),
                     mac: client_mac,
                     session,
+                    socket,
                 },
             );
-            return Some(out);
+            return self.send_transfer(tid);
         }
         let transfer = self.transfers.get_mut(&destination)?;
         if transfer.ip != ip || transfer.port != port || transfer.mac != client_mac {
@@ -596,22 +636,7 @@ impl Ethernet {
             ));
         }
         match transfer.session.acknowledge(data) {
-            Ok(tftp::Ack::Next) => {
-                self.pending_frames.extend(
-                    transfer.session.packets().skip(1).map(|packet| {
-                        datagram(self.server_mac, client_mac, server, ip, destination, port, packet)
-                    }),
-                );
-                Some(datagram(
-                    self.server_mac,
-                    client_mac,
-                    server,
-                    ip,
-                    destination,
-                    port,
-                    &transfer.session.packet,
-                ))
-            }
+            Ok(tftp::Ack::Next) => self.send_transfer(destination),
             Ok(tftp::Ack::Ignored) => None,
             Ok(tftp::Ack::Done) => {
                 self.transfers.remove(&destination);
@@ -636,12 +661,25 @@ impl Ethernet {
             }
         }
     }
+    fn send_transfer(&mut self, tid: u16) -> Option<Vec<u8>> {
+        let server = self.state.lock().unwrap().config.settings.server_ip;
+        let transfer = self.transfers.get(&tid)?;
+        match transfer_packets(transfer, self.server_mac, server, tid) {
+            Ok(frames) => { let mut packets=frames.into_iter(); let first=packets.next(); self.pending_frames.extend(packets); first }
+            Err(e) => { self.state.lock().unwrap().event(&transfer.ip.to_string(), "TFTP", e); None }
+        }
+    }
     pub fn tick(&mut self) -> Vec<Vec<u8>> {
         let server = self.state.lock().unwrap().config.settings.server_ip;
         let mut out = std::mem::take(&mut self.pending_frames);
+        out.extend(self.rarp.tick(&self.state, self.server_mac));
         out.extend(self.last.tick());
         let mut expired = vec![];
         for (port, t) in &mut self.transfers {
+            if let Some(socket) = &t.socket {
+                let mut discarded = [0; 4096];
+                for _ in 0..64 { if socket.recv_from(&mut discarded).is_err() { break; } }
+            }
             if t.session.expired() {
                 expired.push(*port);
                 self.state.lock().unwrap().event(
@@ -652,15 +690,10 @@ impl Ethernet {
                 continue;
             }
             match t.session.retry() {
-                Ok(true) => out.extend(t.session.packets().map(|packet| datagram(
-                    self.server_mac,
-                    t.mac,
-                    server,
-                    t.ip,
-                    *port,
-                    t.port,
-                    packet,
-                ))),
+                Ok(true) => match transfer_packets(t, self.server_mac, server, *port) {
+                    Ok(frames) => out.extend(frames),
+                    Err(e) => { expired.push(*port); self.state.lock().unwrap().event(&t.ip.to_string(), "TFTP", e); }
+                },
                 Ok(false) => {}
                 Err(e) => {
                     expired.push(*port);
@@ -693,6 +726,12 @@ impl Ethernet {
         let std::net::IpAddr::V4(destination) = target.ip() else {
             return None;
         };
+        if !self.virtual_wire && let Some(socket) = &self.dhcp_socket {
+            if let Err(e) = socket.send_to(&response.bytes, target) {
+                self.state.lock().unwrap().event(&request.mac, "DHCP", e.to_string());
+            }
+            return None;
+        }
         let destination_mac = if destination.is_broadcast() {
             [255; 6]
         } else {
@@ -708,23 +747,12 @@ impl Ethernet {
             &response.bytes,
         ))
     }
-    fn rarp(&self, frame: &[u8]) -> Option<Vec<u8>> {
+    fn rarp(&mut self, frame: &[u8]) -> Option<Vec<u8>> {
         if frame.len() < 42 || frame[14..22] != [0, 1, 8, 0, 6, 4, 0, 3] {
             return None;
         }
-        let address = mac(&frame[32..38]);
-        let mut s = self.state.lock().unwrap();
-        let ip = s.config.devices.iter().find(|d| d.mac == address)?.ip?;
-        let mut response = Vec::from(&frame[..42]);
-        response[..6].copy_from_slice(&frame[6..12]);
-        response[6..12].copy_from_slice(&self.server_mac);
-        response[20..22].copy_from_slice(&4u16.to_be_bytes());
-        response[22..28].copy_from_slice(&self.server_mac);
-        response[28..32].copy_from_slice(&s.config.settings.server_ip.octets());
-        response[38..42].copy_from_slice(&ip.octets());
-        response.resize(60, 0);
-        s.event(&address, "RARP", ip.to_string());
-        Some(response)
+        if frame[6..12] != frame[32..38] || frame[22..28] != frame[32..38] || frame[32] & 1 != 0 { return None; }
+        self.rarp.request(&self.state, self.server_mac, frame)
     }
     fn rmp(&mut self, frame: &[u8]) -> Option<Vec<u8>> {
         let length = u16::from_be_bytes([frame[12], frame[13]]) as usize;
@@ -770,6 +798,7 @@ impl Ethernet {
         let default = profile
             .boot_files
             .get("rmp")
+            .or_else(|| profile.boot_files.get("hp-rmp"))
             .or_else(|| profile.boot_files.get("default"))
             .unwrap_or(&profile.kernel);
         let payload = match *data.first()? {
@@ -923,6 +952,7 @@ pub fn check_capture_permission(interface: &str) -> Result<(), String> {
 pub async fn start(
     state: Shared,
     stop: Arc<AtomicBool>,
+    dhcp_socket: Option<std::net::UdpSocket>,
 ) -> Result<tokio::task::JoinHandle<()>, String> {
     let settings = state.lock().unwrap().config.settings.clone();
     #[cfg(target_os = "macos")]
@@ -952,6 +982,7 @@ pub async fn start(
         };
         let _ = tx.send(Ok(()));
         let mut ethernet = Ethernet::new(state.clone(), server_mac, false);
+        ethernet.dhcp_socket = dhcp_socket;
         while !stop.load(Ordering::Relaxed) {
             match capture.receive() {
                 Ok(Some(frame)) => {
@@ -1263,6 +1294,48 @@ fn probe_reply(
 #[cfg(test)]
 mod fragment_tests {
     use super::*;
+    #[tokio::test]
+    async fn broadcast_bootparams_uses_live_mapper_socket_and_expires_with_service() {
+        let root = std::env::temp_dir().join(format!("bootah-rpc-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(".bootah-openbsd-nfs.json"), br#"{"version":1,"profile":"openbsd"}"#).unwrap();
+        let state = Store::open(root.join("state.json")).unwrap();
+        let client = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let peer = client.local_addr().unwrap();
+        let ip = std::net::Ipv4Addr::LOCALHOST;
+        let client_mac = [0, 0x14, 0x4f, 0xf3, 0xd5, 0xe8];
+        {
+            let mut store = state.lock().unwrap();
+            store.config.settings.server_ip = ip;
+            store.config.settings.bind_ip = ip;
+            store.config.devices.push(Device { mac: mac(&client_mac), ip: Some(ip), profile_id: Some("openbsd".into()), ..Default::default() });
+            store.config.profiles.push(serde_json::from_value(serde_json::json!({
+                "id":"openbsd", "name":"OpenBSD", "kind":"bsd", "system_id":"openbsd", "architecture":"sparc64", "root":root
+            })).unwrap());
+        }
+        let tasks = crate::nfs::portmapper_assigned("127.0.0.1:0", 2049, Some(state.clone())).await.unwrap();
+        let endpoint = state.lock().unwrap().portmap_sender.upgrade().unwrap().local_addr().unwrap();
+        let words: [u32; 19] = [7,0,2,100000,2,5,0,0,0,0,100026,1,1,20,1,127,0,0,1];
+        let packet = words.into_iter().flat_map(u32::to_be_bytes).collect::<Vec<_>>();
+        let mut frame = datagram(client_mac, [255;6], ip, std::net::Ipv4Addr::BROADCAST,
+            peer.port(), endpoint.port(), &packet);
+        let mut ethernet = Ethernet::new(state.clone(), [2;6], false);
+        assert!(ethernet.handle(&frame).is_none());
+        let mut out = [0;4096];
+        let (n, from) = tokio::time::timeout(Duration::from_secs(1), client.recv_from(&mut out)).await.unwrap().unwrap();
+        assert_eq!(from, endpoint);
+        assert_eq!(u32::from_be_bytes(out[..4].try_into().unwrap()), 7);
+        assert_eq!(u32::from_be_bytes(out[24..28].try_into().unwrap()), crate::bootparams::configured_port(&state).unwrap().unwrap() as u32);
+        assert!(out[..n].windows(19).any(|b| b == b"bootah-00144ff3d5e8"));
+        frame[6] ^= 2;
+        assert!(ethernet.handle(&frame).is_none());
+        assert!(tokio::time::timeout(Duration::from_millis(40), client.recv_from(&mut out)).await.is_err());
+        for task in tasks { task.abort(); let _ = task.await; }
+        assert!(state.lock().unwrap().portmap_sender.upgrade().is_none());
+        drop(ethernet);
+        drop(state);
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn observed_arp_rebinds_known_client_before_http() {
         let path = std::env::temp_dir().join(format!(
@@ -1382,5 +1455,61 @@ mod fragment_tests {
         }
         assert_eq!(payload, &original[34..]);
         assert_eq!(&payload[8..], data);
+    }
+}
+
+#[cfg(test)]
+mod broadcast_tftp_tests {
+    use super::*;
+    use std::net::{Ipv4Addr, UdpSocket};
+    #[test]
+    fn live_broadcast_tftp_reserves_tid_and_unicast_ack_completes() {
+        let path=std::env::temp_dir().join(format!("bootah-broadcast-tftp-{}.json",uuid::Uuid::new_v4()));
+        let state=Store::open(path.clone()).unwrap();
+        let client=[0,0x14,0x4f,0xf3,0xd5,0xe8];let host=[2,0,0,0,0,1];
+        let server=Ipv4Addr::new(127,0,0,1);let ip=server;
+        {
+            let mut s=state.lock().unwrap();s.config.settings.server_ip=server;s.config.settings.bind_ip=server;
+            s.config.profiles.push(serde_json::from_value(serde_json::json!({"id":"obp","name":"OBP","architecture":"sparc64","kind":"linux","root":"/tmp","boot_files":{"default":"bootah-obp.bin","sparc64_grub":"grub.img"}})).unwrap());
+            s.config.devices.push(Device{id:mac(&client),mac:mac(&client),ip:Some(ip),profile_id:Some("obp".into()),..Default::default()});
+        }
+        let mut ethernet=Ethernet::new(state.clone(),host,false);
+        let peer=UdpSocket::bind((ip,0)).unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        let client_port=peer.local_addr().unwrap().port();
+        let rrq=b"\0\x017F000001\0octet\0";
+        let unicast=datagram(client,host,ip,server,client_port,69,rrq);
+        assert!(ethernet.handle(&unicast).is_none());
+        let broadcast=datagram(client,[255;6],ip,Ipv4Addr::BROADCAST,client_port,69,rrq);
+        let mut wrong=broadcast.clone();wrong[6..12].fill(9);
+        assert!(ethernet.handle(&wrong).is_none());
+        assert!(ethernet.handle(&broadcast).is_none());
+        let mut packet=[0;2048];let (mut size,source)=peer.recv_from(&mut packet).unwrap();
+        let tid=source.port();assert_eq!(source.ip(),server);
+        assert!(UdpSocket::bind((server,tid)).is_err());
+        let initial=packet[..size].to_vec();
+        assert!(ethernet.handle(&broadcast).is_none());
+        let (n,from)=peer.recv_from(&mut packet).unwrap();assert_eq!(from,source);assert_eq!(&packet[..n],initial);
+        let mut bytes=Vec::new();
+        loop {
+            assert_eq!(&packet[..2],&[0,3]);bytes.extend_from_slice(&packet[4..size]);
+            let ack=[0,4,packet[2],packet[3]];
+            peer.send_to(&ack,source).unwrap();
+            let mut received=[0;8];
+            let socket=ethernet.transfers[&tid].socket.as_ref().unwrap();
+            socket.set_nonblocking(false).unwrap();
+            socket.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+            let (n,from)=socket.recv_from(&mut received).unwrap();
+            socket.set_nonblocking(true).unwrap();
+            assert_eq!(&received[..n],&ack);assert_eq!(from,peer.local_addr().unwrap());
+            let request=datagram(client,host,ip,server,client_port,tid,&ack);
+            assert!(ethernet.handle(&request).is_none());
+            if size<516 { break; }
+            let (n,from)=peer.recv_from(&mut packet).unwrap();size=n;assert_eq!(from,source);
+        }
+        assert_eq!(bytes,crate::sparc_obp::LOADER);
+        assert!(!ethernet.transfers.contains_key(&tid));
+        assert!(UdpSocket::bind((server,tid)).is_ok());
+        let _=std::fs::remove_file(path);
     }
 }

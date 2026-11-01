@@ -1,0 +1,23 @@
+{
+  "release": "v2.0.0",
+  "url": "https://github.com/ipxe/ipxe/releases/download/v2.0.0/ipxeboot.tar.gz",
+  "archive_sha256": "01a526d4cc791fc30362259c609d6c506cc64a7bdff51b9a5eb788354e17eee1",
+  "files": {
+    "signed-x64-ipxe-shim.efi": {
+      "path": "ipxeboot/x86_64-sb/ipxe-shim.efi",
+      "sha256": "83ad71c7d4f2cf328b75b653d09bf3bea5f29bee2e67ca058f37d83c07133885"
+    },
+    "signed-x64-ipxe.efi": {
+      "path": "ipxeboot/x86_64-sb/ipxe.efi",
+      "sha256": "6558e37887516b246d6a97122e8d18bedfe4197b7ba7f67bf1bf102a16678d33"
+    },
+    "signed-arm64-ipxe-shim.efi": {
+      "path": "ipxeboot/arm64-sb/ipxe-shim.efi",
+      "sha256": "8c13ca9078279c4012dc26dbd095bbebd54553db88af0b67a76b1641cf7b1a87"
+    },
+    "signed-arm64-ipxe.efi": {
+      "path": "ipxeboot/arm64-sb/ipxe.efi",
+      "sha256": "01b2438e6dc354c343590c308f1d4f000bc098be4d2237540432023abdbddcb8"
+    }
+  }
+}

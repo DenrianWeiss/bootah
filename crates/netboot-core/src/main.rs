@@ -19,6 +19,7 @@ mod linux_fallback;
 mod linux_media;
 mod media;
 mod alpha_srm;
+mod sparc_obp;
 mod media_source;
 mod model;
 mod mop;

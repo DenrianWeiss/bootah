@@ -128,6 +128,50 @@ pub fn import_netboot(
     }))
 }
 
+pub fn import_iso(source: &Path, root: &Path, id: &str) -> Result<Option<ImportResult>, String> {
+    let image = crate::media_source::Image::open(source)?;
+    let Ok(info) = image.read(".disk/info", 65536) else {
+        return Ok(None);
+    };
+    if !info.starts_with(b"Debian") || !image.entries().contains_key("boot/initrd.gz") {
+        return Ok(None);
+    }
+    let Ok(compressed) = image.read("boot/vmlinuz", LIMIT as usize) else {
+        return Ok(None);
+    };
+    let Ok(kernel) = unpack_kernel(&compressed) else {
+        return Ok(None);
+    };
+    crate::linux_compat::client("alpha")?;
+    let cache = root.join(".bootah-alpha-cd");
+    fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
+    let original = cache.join("original-initrd.gz");
+    image.materialize("boot/initrd.gz", &original)?;
+    crate::debian_compat::prepare(&image, &original, &root.join("initrd.gz"), &cache, "alpha")?;
+    crate::media_source::register(source, root)?;
+    fs::write(root.join("bootah-srm.bin"), LOADER).map_err(|e| e.to_string())?;
+    fs::write(root.join("vmlinux"), kernel).map_err(|e| e.to_string())?;
+    fs::write(
+        root.join(".bootah-linux-compat.json"),
+        br#"{"version":1,"transport":"nbd"}"#,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(Some(ImportResult {
+        profiles: vec![Profile {
+            secure_boot: None, system_id: "debian".into(), system_name: "Debian".into(),
+            id: format!("{id}-0"), name: "Debian Alpha CD installer (SRM/NBD)".into(),
+            architecture: "alpha".into(), kind: "linux".into(), root: root.into(),
+            boot_files: BTreeMap::from([("default".into(), "bootah-srm.bin".into())]),
+            kernel: "vmlinux".into(), initrd: "initrd.gz".into(), dtb: String::new(),
+            arguments: "bootah.media=nbd bootah.server={server} bootah.port={nbd_port} bootah.export={profile}".into(),
+            media: source.to_string_lossy().into(), status: "prepared".into(),
+            notes: "Original Debian Alpha CD kernel and initrd with matching ISO NIC/NBD modules and EV56 media client; read-only original ISO via NBD".into(),
+            boot_evidence: None,
+        }],
+        warnings: vec!["Alpha ISO installation requires the NBD service; validate stock SRM and installer on the target platform".into()],
+    }))
+}
+
 pub fn enabled(profile: &Profile) -> bool {
     profile.architecture == "alpha"
         && profile.kind == "linux"

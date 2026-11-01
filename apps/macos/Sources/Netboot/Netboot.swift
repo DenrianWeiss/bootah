@@ -149,7 +149,7 @@ struct NetworkInterfaceInfo: Codable, Identifiable {
 struct NetworkReport: Codable {
     var interfaces:[NetworkInterfaceInfo]; var selected:String; var address:NetworkAddress?
     var status:String; var source:String; var servers:[String]; var detail:String; var checkedAt:UInt64; var showInterfaceSelector:Bool?
-    var summary:String { ([L10n.tr(status),selected]+servers).filter{!$0.isEmpty}.joined(separator:"  ") }
+    var summary:String { ((status == "lease_found" ? [] : [L10n.tr(status)])+[selected]+servers).filter{!$0.isEmpty}.joined(separator:"  ") }
 }
 struct NetworkChoice: Identifiable {
     var interface:NetworkInterfaceInfo; var address:NetworkAddress?
@@ -256,6 +256,7 @@ struct NetworkPermissions:Codable {var helperAvailable:Bool;var reason:String;va
     var startupPermissionsShown=false
     var checkingPermissions=false
     var starting=false
+    var startAfterNetworkApproval=false
     var showNetworkPermissions=false
     var bundledCore:Bool {ProcessInfo.processInfo.environment["NETBOOT_API"] == nil && ProcessInfo.processInfo.environment["NETBOOT_CORE"] == nil && Bundle.main.bundleURL.pathExtension == "app"}
     var helperAvailable:Bool {bundledCore && networkPermissions?.helperAvailable == true}
@@ -317,6 +318,19 @@ struct NetworkPermissions:Codable {var helperAvailable:Bool;var reason:String;va
             else if networkHelper.status == .enabled {showNetworkPermissions=false;await detectNetwork(authorize:true)}
         } catch {self.error=L10n.tr("无法启用网络助手。请检查系统设置中的后台项目许可。")+"\n"+error.localizedDescription}
     }
+    func confirmNetworkAccess() async {
+        guard !starting && snapshot?.running != true else {showNetworkPermissions=false;return}
+        showNetworkPermissions=false
+        if helperAvailable {
+            await authorizeNetworkHelper()
+            if networkHelper.status == .requiresApproval {
+                startAfterNetworkApproval=true
+                return
+            }
+            guard networkHelper.status == .enabled else {return}
+        }
+        _ = await send("api/service/start",[String:String]())
+    }
     func disableNetworkHelper() async {
         guard helperAvailable && snapshot?.running != true else{return}
         do {try await networkHelper.unregister();await refreshNetworkPermissions()}catch{self.error=error.localizedDescription}
@@ -347,6 +361,10 @@ struct NetworkPermissions:Codable {var helperAvailable:Bool;var reason:String;va
                     automationCapabilities[profile.id]=try JSONDecoder().decode([String].self,from:data)
                     capabilityProfiles[profile.id]=profile
                 } catch {continue}
+            }
+            if startAfterNetworkApproval && networkHelper.status == .enabled {
+                startAfterNetworkApproval=false
+                if snapshot?.running != true {_ = await send("api/service/start",[String:String]())}
             }
             if !detected && snapshot?.running == false { detected=true; await detectNetwork() }
             if !startupPermissionsShown && !detecting {
@@ -435,6 +453,15 @@ struct NetworkPermissions:Codable {var helperAvailable:Bool;var reason:String;va
     func commands(_ id: String) async {
         do { let (bytes, _) = try await fetch(url:endpoint.appendingPathComponent("api/profiles/\(id)/uboot")); uboot=String(decoding:bytes,as:UTF8.self) } catch { self.error=error.localizedDescription }
     }
+    func parameters(_ image:SystemImage,preview:Bool=false) async -> ParameterInfo? {
+        do {
+            var request=URLRequest(url:endpoint.appendingPathComponent("api/profiles/\(image.id)/parameters"))
+            if preview {let encoder=JSONEncoder();encoder.keyEncodingStrategy = .convertToSnakeCase;request.httpMethod="POST";request.httpBody=try encoder.encode(image);request.setValue("application/json",forHTTPHeaderField:"Content-Type")}
+            let (data,response)=try await fetch(request:request)
+            guard let http=response as? HTTPURLResponse,(200..<300).contains(http.statusCode) else {self.error=L10n.message(String(decoding:data,as:UTF8.self));return nil}
+            let decoder=JSONDecoder();decoder.keyDecodingStrategy = .convertFromSnakeCase;return try decoder.decode(ParameterInfo.self,from:data)
+        }catch {self.error=error.localizedDescription;return nil}
+    }
     func secureBootSupport(_ id:String) async -> SecureBootSupport? {
         do {
             let (data,response)=try await fetch(url:endpoint.appendingPathComponent("api/profiles/\(id)/secure-boot"))
@@ -474,7 +501,6 @@ struct MainView: View {
     @State private var deletingSelection=false
     @State var selectedImage:String?
     @State var image: SystemImage?
-    @State var imageDetails: SystemImage?
     @State private var importOptions = false
     @State private var importURL: URL?
     @State private var importing = false
@@ -601,7 +627,7 @@ struct MainView: View {
                             }
                         }.frame(height: min(240, CGFloat(Set((server.snapshot?.profiles ?? []).flatMap{$0.bootFiles.keys}).intersection(FirmwareKeys.all).count * 32 + 32)))
                     List(server.snapshot?.profiles ?? [],selection:$selectedImage) {p in
-                        HStack { SystemLogo(id:p.logoId); VStack(alignment:.leading) {Button(p.displayName) {image=p}.buttonStyle(.plain); Text(p.name).font(.caption).foregroundStyle(.secondary)}; Spacer(); Text(p.architecture).foregroundStyle(.secondary); automationButton(scope:"profile",id:p.id,label:server.snapshot?.automations?["profile:\(p.id)"]?.filename ?? L10n.tr("自动安装配置")); Button(L10n.tr("镜像详情")){imageDetails=p}; Button(L10n.tr("启动方式")) {Task {await server.manualCommands(p.id);manualCommands=true}} }.tag(p.id).accessibilityElement(children:.contain)
+                        HStack { SystemLogo(id:p.logoId); VStack(alignment:.leading) {Button(p.displayName) {image=p}.buttonStyle(.plain); Text(p.name).font(.caption).foregroundStyle(.secondary)}; Spacer(); Text(p.architecture).foregroundStyle(.secondary); automationButton(scope:"profile",id:p.id,label:server.snapshot?.automations?["profile:\(p.id)"]?.filename ?? L10n.tr("自动安装配置")); Button(L10n.tr("镜像设置")){image=p}; Button(L10n.tr("启动方式")) {Task {await server.manualCommands(p.id);manualCommands=true}} }.tag(p.id).accessibilityElement(children:.contain)
                     }
                     }
                 default:
@@ -658,7 +684,6 @@ struct MainView: View {
         .sheet(item:$machine) {d in MachineEditor(server:server,machine:d)}
         .sheet(isPresented:$importOptions){if let url=importURL {ImportOptionsView(url:url){trusted in startImport(url:url,trusted:trusted)}}}
         .sheet(isPresented:$server.showNetworkPermissions){NetworkPermissionsView(server:server)}
-        .sheet(item:$imageDetails){p in ImageDetailsView(image:p,server:server)}
         .sheet(item:$image) {p in ImageEditor(server:server,image:p)}
         .sheet(isPresented:$network) {if let settings=server.snapshot?.settings {NetworkEditor(server:server,settings:settings)}}
         .sheet(isPresented:$about) {AboutView(server:server)}
@@ -685,6 +710,7 @@ struct ImportOptionsView:View {
 }
 struct ImageTechnicalFields:View {
     let image:SystemImage
+    var showArguments=true
     private func field(_ label:String,_ value:String)->some View {
         Group {if !value.isEmpty {LabeledContent(L10n.tr(label)){Text(value).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading)}}}
     }
@@ -694,53 +720,7 @@ struct ImageTechnicalFields:View {
             field("入口",evidence.entry);field("启动配置",evidence.config);field("内核",evidence.kernel);field("Initrd",evidence.initrd);field("安装源",evidence.sourceLabel)
             ForEach((evidence.diagnostics ?? []).filter{!["BOOT_CONFIG_FAMILY_LAYOUT","UOS_MANUAL_ONLY"].contains($0.code)},id:\.code){diagnostic in field(diagnostic.label,L10n.message(diagnostic.detail))}
         }
-        field("参数",image.arguments);field("启动文件映射",image.bootFiles.keys.sorted().map{"\($0)=\(image.bootFiles[$0]!)"}.joined(separator:"\n"))
-    }
-}
-struct ImageDetailsView:View {
-    let image:SystemImage
-    var server:Server
-    @Environment(\.dismiss) private var dismiss
-    var body:some View {VStack(alignment:.leading){Text(L10n.tr("镜像详情")).font(.title2);Form{SecureBootSettings(image:image,server:server);ImageTechnicalFields(image:image)}.formStyle(.grouped);HStack{Spacer();Button(L10n.tr("完成")){dismiss()}.keyboardShortcut(.defaultAction)}}.padding(24).frame(width:650,height:560)}
-}
-struct SecureBootSettings:View {
-    let image:SystemImage
-    var server:Server
-    @State private var busy=true
-    @State private var detected:SecureBootSupport?
-    private var support:SecureBootSupport? {detected ?? server.snapshot?.profiles.first(where:{$0.id==image.id})?.secureBoot ?? image.secureBoot}
-    private func update() async {busy=true;detected=await server.secureBootSupport(image.id);busy=false}
-    var body:some View {
-        Group {
-            if let support,support.eligible {
-                Section(L10n.t("启动设置","Boot settings")) {
-                    Toggle(L10n.t("安全启动支持","Secure Boot support"),isOn:Binding(get:{support.enabled},set:{enabled in
-                        busy=true
-                        Task {_ = await server.send("api/profiles/\(image.id)/secure-boot",["enabled":enabled],method:"PUT");await update()}
-                    })).disabled(busy || (!support.enabled && support.state != "passed"))
-                    if support.enabled {
-                        if (support.modes ?? []).count > 1 {
-                            Picker(L10n.t("启动方式","Boot method"),selection:Binding(get:{support.mode ?? "media-native"},set:{mode in
-                                busy=true
-                                Task {_ = await server.send("api/profiles/\(image.id)/secure-boot",SecureBootChange(enabled:true,mode:mode),method:"PUT");await update()}
-                            })) {
-                                ForEach(support.modes ?? [],id:\.self) {mode in Text(mode == "media-native" ? L10n.t("原生网络启动（使用镜像内组件）","Native network boot (image components)") : L10n.t("iPXE shim（使用签名 iPXE 引导）","iPXE shim (signed iPXE)")).tag(mode)}
-                            }.pickerStyle(.radioGroup).disabled(busy)
-                        } else {
-                            LabeledContent(L10n.t("启动方式","Boot method"),value:support.mode == "signed-ipxe" ? "iPXE shim" : L10n.t("原生网络启动","Native network boot"))
-                        }
-                        Text(L10n.t("对后续启动生效","Applies to subsequent boots")).font(.caption)
-                    }
-                    Text(L10n.t("实际启动取决于设备信任与镜像兼容性。","Booting depends on device trust and image compatibility.")).font(.caption)
-                    Button(L10n.t("重新检测","Check again")) {busy=true;Task {_ = await server.send("api/profiles/\(image.id)/secure-boot/check",[String:String]());await update()}}.disabled(busy)
-                    if busy {ProgressView(L10n.t("正在准备或检查…","Preparing or checking…"))}
-                    if !busy {Text(support.detail.isEmpty ? L10n.t("尚未检查","Not checked") : L10n.message(support.detail)).font(.caption).textSelection(.enabled)}
-                    DisclosureGroup(L10n.t("查看检查结果","View check results")) {
-                        ForEach(support.components,id:\.file){c in VStack(alignment:.leading,spacing:4){Text(c.file).font(.headline);Text(c.signer);Text(c.issuer);Text("SHA-256: \(c.sha256)");Text(L10n.t("证书指纹","Certificate fingerprint")+": "+c.certificateSha256)}.font(.caption).textSelection(.enabled)}
-                    }
-                }
-            }
-        }.task {await update()}
+        if showArguments {field("参数",image.arguments)};field("启动文件映射",image.bootFiles.keys.sorted().map{"\($0)=\(image.bootFiles[$0]!)"}.joined(separator:"\n"))
     }
 }
 struct AboutView:View {
@@ -775,7 +755,7 @@ struct AboutView:View {
 }
 
 enum FirmwareKeys {
-    static let all:Set<String> = ["x86-bios","ia64","ia32-efi","x64-efi","ebc-efi","alpha","powerpc-of","powerpc-epapr","power-opal","arm32-efi","arm64-efi","ia32-http","x64-http","arm32-http","arm64-http","arm32-uboot","arm64-uboot","riscv32-efi","riscv64-http","loongarch64-efi","riscv64-efi","hp-rmp"]
+    static let all:Set<String> = ["x86-bios","ia64","ia32-efi","x64-efi","ebc-efi","alpha","sparc64","powerpc-of","powerpc-epapr","power-opal","arm32-efi","arm64-efi","ia32-http","x64-http","arm32-http","arm64-http","arm32-uboot","arm64-uboot","riscv32-efi","riscv64-http","loongarch64-efi","riscv64-efi","hp-rmp"]
 }
 struct BootCommandsView:View {
     var manual:ManualBoot
@@ -826,34 +806,100 @@ struct MachineEditor: View {
         }.frame(width:480,height:360)
     }
 }
+struct ParameterInfo:Decodable {var originalArguments:String?;var editable:Bool;var applies:Bool;var preview:String}
+struct ImageSettingsChange:Encodable {
+    var profile:SystemImage
+    var secureBoot:SecureBootChange?
+}
 struct ImageEditor:View {
     var server:Server
     @State var image:SystemImage
     @State var mapping=""
+    @State var parameterInfo:ParameterInfo?
+    @State var parameterPreview:String?
+    @State var secureEnabled=false
+    @State var secureMode=""
+    @State var busy=false
     @Environment(\.dismiss) var dismiss
+    private var secured:Bool {image.secureBoot?.enabled == true}
+    private var existing:Bool {server.snapshot?.profiles.contains(where:{$0.id==image.id}) == true}
     var body:some View {
-        VStack {
+        VStack(alignment:.leading) {
+            Text(L10n.tr("镜像设置")).font(.title2)
             Form {
-                TextField(L10n.tr("名称"),text:$image.name)
-                TextField(L10n.tr("架构"),text:$image.architecture)
-                Picker(L10n.tr("类型"),selection:$image.kind){ForEach(["linux","bsd","windows","windows-pe-iso","fit","raw","solaris"],id:\.self){Text($0 == "windows-pe-iso" ? L10n.tr("Windows PE 系统盘") : $0).tag($0)}}
-                HStack {TextField(L10n.tr("目录"),text:$image.root);Button(L10n.tr("选择")) {let panel=NSOpenPanel();panel.canChooseDirectories=true;panel.canChooseFiles=false;if panel.runModal() == .OK {image.root=panel.url?.path ?? ""}}}
-                TextField(L10n.tr("内核 / 引导程序"),text:$image.kernel)
-                TextField("Initrd",text:$image.initrd)
-                TextField("DTB",text:$image.dtb)
-                TextField(L10n.tr("参数"),text:$image.arguments)
-                DisclosureGroup(L10n.tr("镜像详情")){ImageTechnicalFields(image:image)}
-                TextField(L10n.tr("启动文件映射"),text:$mapping,axis:.vertical).lineLimit(3...6)
-            }.formStyle(.grouped)
-            HStack {Button(L10n.tr("删除"),role:.destructive) {Task {if await server.send("api/profiles/\(image.id)",[String:String](),method:"DELETE"){dismiss()}}};Spacer();Button(L10n.tr("取消")){dismiss()};Button(L10n.tr("保存")) {Task {
+                Section(L10n.tr("基本信息")) {
+                    TextField(L10n.tr("名称"),text:$image.name)
+                    if let media=image.media,!media.isEmpty {LabeledContent(L10n.tr("镜像文件")){Text(media).textSelection(.enabled)}}
+                }
+                if (parameterInfo?.editable ?? (!existing && image.kind != "windows-pe-iso")) && (image.kind != "windows-pe-iso" || secureEnabled) {
+                Section(L10n.tr("启动参数")) {
+                    TextField(L10n.tr(image.kind == "linux" ? "内核命令行" : "启动参数"),text:$image.arguments,axis:.vertical).lineLimit(3...6)
+                    if image.kind == "windows" {Text(L10n.tr("Windows 参数示例：bootlog=on sos=on；多启动项使用 entry={GUID} 指定。" )).font(.caption)}
+                    if existing {
+                        HStack {
+                            Button(L10n.tr("恢复导入时参数")){image.arguments=parameterInfo?.originalArguments ?? ""}.disabled(parameterInfo?.originalArguments == nil || parameterInfo?.editable == false)
+                            Button(L10n.tr("查看参数预览")){Task {busy=true;parameterPreview=await server.parameters(image,preview:true)?.preview;busy=false}}
+                        }
+                        if parameterInfo != nil,parameterInfo?.originalArguments == nil {Text(L10n.tr("此镜像没有导入参数记录。")).font(.caption)}
+                        if let preview=parameterPreview {ScrollView{Text(preview).font(.system(.caption,design:.monospaced)).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading)}.frame(maxHeight:150)}
+                    }
+                }
+                }
+                if let support=image.secureBoot,support.eligible {
+                    Section(L10n.tr("启动设置")) {
+                        Toggle(L10n.tr("安全启动支持"),isOn:$secureEnabled)
+                        if secureEnabled {
+                            Picker(L10n.tr("启动方式"),selection:$secureMode) {
+                                ForEach(support.modes ?? [],id:\.self){mode in Text(mode == "signed-ipxe" ? "iPXE shim" : L10n.tr("原生网络启动")).tag(mode)}
+                            }
+                        }
+                        Text(L10n.message(support.detail)).font(.caption)
+                        DisclosureGroup(L10n.tr("查看检查结果")) {
+                            ForEach(support.components,id:\.file){c in Text([c.file,c.signer,c.issuer,"SHA-256: "+c.sha256,c.certificateSha256].joined(separator:"\n")).font(.caption).textSelection(.enabled)}
+                        }
+                    }
+                }
+                DisclosureGroup(L10n.tr("高级设置")) {
+                    TextField(L10n.tr("架构"),text:$image.architecture).disabled(secured)
+                    Picker(L10n.tr("类型"),selection:$image.kind){ForEach(["linux","bsd","windows","windows-pe-iso","windows-ris","fit","raw","solaris"],id:\.self){Text($0).tag($0)}}.disabled(secured)
+                    HStack {
+                        TextField(L10n.tr("目录"),text:$image.root)
+                        Button(L10n.tr("选择")){let panel=NSOpenPanel();panel.canChooseDirectories=true;panel.canChooseFiles=false;if panel.runModal() == .OK {image.root=panel.url?.path ?? image.root}}
+                    }.disabled(secured)
+                    TextField(L10n.tr("内核 / 引导程序"),text:$image.kernel).disabled(secured)
+                    TextField("Initrd",text:$image.initrd).disabled(secured)
+                    TextField("DTB",text:$image.dtb).disabled(secured)
+                    TextField(L10n.tr("启动文件映射"),text:$mapping,axis:.vertical).lineLimit(3...6).disabled(secured)
+                }
+                DisclosureGroup(L10n.tr("识别与检查结果")){ImageTechnicalFields(image:image,showArguments:parameterInfo?.editable == true)}
+            }.formStyle(.grouped).disabled(busy)
+            HStack {Spacer();Button(L10n.tr("取消")){dismiss()};Button(L10n.tr("保存")) {Task {
                 var files:[String:String]=[:]
-                for line in mapping.split(separator:"\n") {let pair=line.split(separator:"=",maxSplits:1);guard pair.count==2 else {server.error=L10n.tr("请按 x64-efi=bootx64.efi 的格式填写，每行一项");return};files[String(pair[0])]=String(pair[1])}
-                image.bootFiles=files
-                if await server.send("api/profiles",image){dismiss()}
-            }}.keyboardShortcut(.defaultAction)}.padding()
-        }.frame(width:560,height:620).onAppear {mapping=image.bootFiles.sorted(by:{$0.key<$1.key}).map{"\($0.key)=\($0.value)"}.joined(separator:"\n")}
+                for line in mapping.split(separator:"\n") {
+                    let pair=line.split(separator:"=",maxSplits:1,omittingEmptySubsequences:false)
+                    guard pair.count==2,!pair[0].isEmpty,!pair[1].isEmpty,files[String(pair[0])]==nil else {server.error=L10n.tr("请按 x64-efi=bootx64.efi 的格式填写，每行一项");return}
+                    files[String(pair[0])]=String(pair[1])
+                }
+                image.bootFiles=files;busy=true
+                let success:Bool
+                if existing {success=await server.send("api/profiles/\(image.id)/settings",ImageSettingsChange(profile:image,secureBoot:image.secureBoot?.eligible == true ? SecureBootChange(enabled:secureEnabled,mode:secureMode):nil),method:"PUT")}
+                else {success=await server.send("api/profiles",image)}
+                busy=false;if success {dismiss()}
+            }}.keyboardShortcut(.defaultAction)}.disabled(busy)
+        }.padding(24).frame(width:650,height:660).task {
+            if existing {
+                busy=true
+                if image.secureBoot?.eligible == true,let support=await server.secureBootSupport(image.id) {image.secureBoot=support;secureEnabled=support.enabled;secureMode=support.mode ?? support.modes?.first ?? ""}
+                parameterInfo=await server.parameters(image)
+                busy=false
+            }
+        }.onAppear {
+            mapping=image.bootFiles.sorted(by:{$0.key<$1.key}).map{"\($0.key)=\($0.value)"}.joined(separator:"\n")
+            secureEnabled=image.secureBoot?.enabled ?? false;secureMode=image.secureBoot?.mode ?? image.secureBoot?.modes?.first ?? ""
+        }
     }
 }
+
 struct NetworkEditor:View {
     var server:Server
     @State var settings:NetworkSettings
@@ -934,10 +980,6 @@ struct NetworkPermissionsView:View {
                 } else {
                     Text(L10n.tr("连接外部核心时，请在服务所在主机上配置网络权限。"))
                 }
-                Text(L10n.tr("抓包权限与服务端口权限分别检查。ChmodBPF 仅用于抓包，不授予端口绑定权限。"))
-            }
-            ForEach(server.networkPermissions?.issues ?? [],id:\.self){issue in
-                if !issue.contains("ChmodBPF") {Text(AccessGuidance.describe(issue)).textSelection(.enabled)}
             }
             if server.networkPermissions?.issues.contains(where:{$0.contains("ChmodBPF")}) == true && (server.bundledCore || server.networkPermissions?.platform == "macos") {
             Divider()
@@ -949,7 +991,7 @@ struct NetworkPermissionsView:View {
             }
             HStack{
                 Button(L10n.tr("重新检查")){Task{await server.refreshNetworkPermissions()}}.disabled(server.checkingPermissions)
-                Spacer();Button(L10n.tr("好")){dismiss()}.keyboardShortcut(.defaultAction)
+                Spacer();Button(L10n.tr("好")){Task{await server.confirmNetworkAccess()}}.disabled(server.starting || server.detecting || server.checkingPermissions).keyboardShortcut(.defaultAction)
             }
         }.padding(24).frame(width:540).fixedSize(horizontal:false,vertical:true)
     }

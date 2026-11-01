@@ -81,7 +81,7 @@ public class MainWindow : Window {
         return new Border{Child=row,CornerRadius=new CornerRadius(10),Background=Tone("#FFFFFF","#282D36"),Margin=new Thickness(0,0,0,8)};
     }
     static string PageName(string name)=>name switch{"设备"=>T("设备与 Profile","Devices & profiles"),"镜像库"=>T("介质与导入","Media & import"),_=>T("传输与日志","Transfers & logs")};
-    void ShowPage(string name){foreach(var pair in navigation){pair.Value.Background=pair.Key==name?Tone("#DCE8F8","#33445D"):Avalonia.Media.Brushes.Transparent;}pageTitle.Text=PageName(name);tools.Children.Clear();automationButtons.Clear();deleteButtons.Clear();if(name=="设备"){body.Content=devices;tools.Children.Add(Action(T("添加设备","Add device"),()=>EditDevice(null)));tools.Children.Add(Action(T("分配镜像","Assign image"),()=>EditDevice(devices.SelectedItem as Device)));tools.Children.Add(AutomationButton("device"));tools.Children.Add(DeleteButton("device"));}else if(name=="镜像库"){var mediaLayout=new DockPanel();var defaultsScroll=new ScrollViewer{Content=architectureDefaults,MaxHeight=240,Margin=new Thickness(0,0,0,16)};DockPanel.SetDock(defaultsScroll,Dock.Top);mediaLayout.Children.Add(defaultsScroll);mediaLayout.Children.Add(systems);body.Content=mediaLayout;RenderArchitectureDefaults();var import=Action(T("导入 ISO","Import ISO"),ImportIso);import.Classes.Add("accent");tools.Children.Add(import);trustLocalIso.Content=T("信任所选本地 ISO 安装源","Trust selected local ISO source");tools.Children.Add(trustLocalIso);tools.Children.Add(Action(T("手动添加","Add manually"),()=>EditProfile(null)));tools.Children.Add(Action(T("编辑","Edit"),()=>EditProfile(systems.SelectedItem as Profile)));tools.Children.Add(Action(Tr("镜像详情"),()=>ShowImageDetails(systems.SelectedItem as Profile)));tools.Children.Add(AutomationButton("profile"));tools.Children.Add(Action(Tr("启动方式"),Commands));tools.Children.Add(DeleteButton("profile"));}else{body.Content=events;tools.Children.Add(logLevel);tools.Children.Add(includePrivate);tools.Children.Add(Action(Tr("清除日志"),async()=>{await api.Send("/api/events",new{},HttpMethod.Delete);await Refresh();}));tools.Children.Add(Action(Tr("回到日志顶部"),()=>{if(events.ItemCount>0 && events.Items[0] is object first)events.ScrollIntoView(first);return Task.CompletedTask;}));tools.Children.Add(Action(T("导出诊断日志","Export diagnostics"),ExportDiagnostics));}foreach(var control in tools.Children){control.Margin=new Thickness(0,0,name=="活动"?20:8,8);control.VerticalAlignment=Avalonia.Layout.VerticalAlignment.Center;}UpdateAutomationButtons();}
+    void ShowPage(string name){foreach(var pair in navigation){pair.Value.Background=pair.Key==name?Tone("#DCE8F8","#33445D"):Avalonia.Media.Brushes.Transparent;}pageTitle.Text=PageName(name);tools.Children.Clear();automationButtons.Clear();deleteButtons.Clear();if(name=="设备"){body.Content=devices;tools.Children.Add(Action(T("添加设备","Add device"),()=>EditDevice(null)));tools.Children.Add(Action(T("分配镜像","Assign image"),()=>EditDevice(devices.SelectedItem as Device)));tools.Children.Add(AutomationButton("device"));tools.Children.Add(DeleteButton("device"));}else if(name=="镜像库"){var mediaLayout=new DockPanel();var defaultsScroll=new ScrollViewer{Content=architectureDefaults,MaxHeight=240,Margin=new Thickness(0,0,0,16)};DockPanel.SetDock(defaultsScroll,Dock.Top);mediaLayout.Children.Add(defaultsScroll);mediaLayout.Children.Add(systems);body.Content=mediaLayout;RenderArchitectureDefaults();var import=Action(T("导入 ISO","Import ISO"),ImportIso);import.Classes.Add("accent");tools.Children.Add(import);trustLocalIso.Content=T("信任所选本地 ISO 安装源","Trust selected local ISO source");tools.Children.Add(trustLocalIso);tools.Children.Add(Action(T("手动添加","Add manually"),()=>EditProfile(null)));tools.Children.Add(Action(T("镜像设置","Image settings"),()=>EditProfile(systems.SelectedItem as Profile)));tools.Children.Add(AutomationButton("profile"));tools.Children.Add(Action(Tr("启动方式"),Commands));tools.Children.Add(DeleteButton("profile"));}else{body.Content=events;tools.Children.Add(logLevel);tools.Children.Add(includePrivate);tools.Children.Add(Action(Tr("清除日志"),async()=>{await api.Send("/api/events",new{},HttpMethod.Delete);await Refresh();}));tools.Children.Add(Action(Tr("回到日志顶部"),()=>{if(events.ItemCount>0 && events.Items[0] is object first)events.ScrollIntoView(first);return Task.CompletedTask;}));tools.Children.Add(Action(T("导出诊断日志","Export diagnostics"),ExportDiagnostics));}foreach(var control in tools.Children){control.Margin=new Thickness(0,0,name=="活动"?20:8,8);control.VerticalAlignment=Avalonia.Layout.VerticalAlignment.Center;}UpdateAutomationButtons();}
     async Task ExportDiagnostics(){
         if(!File.Exists(App.CoreBinary))throw new Exception(T("找不到本机核心程序","Local core executable not found"));
         if(includePrivate.IsChecked==true){var confirm=new FormWindow(T("原始日志包含隐私信息","Raw logs contain private data"));confirm.Note(T("原始日志可能包含设备地址和本地文件路径。","Raw logs may contain device addresses and local file paths."));if(!await confirm.ShowDialog<bool>(this))return;}
@@ -148,7 +148,7 @@ public class MainWindow : Window {
         if(string.IsNullOrEmpty(id))defaults.Remove(key);else defaults[key]=id;
         await api.Send("/api/default-profiles",defaults,HttpMethod.Put);await Refresh();
     }
-    static readonly HashSet<string> FirmwareKeys=["x86-bios","ia64","ia32-efi","x64-efi","ebc-efi","alpha","powerpc-of","powerpc-epapr","power-opal","arm32-efi","arm64-efi","ia32-http","x64-http","arm32-http","arm64-http","arm32-uboot","arm64-uboot","riscv32-efi","riscv64-http","loongarch64-efi","riscv64-efi","hp-rmp"];
+    static readonly HashSet<string> FirmwareKeys=["x86-bios","ia64","ia32-efi","x64-efi","ebc-efi","alpha","sparc64","powerpc-of","powerpc-epapr","power-opal","arm32-efi","arm64-efi","ia32-http","x64-http","arm32-http","arm64-http","arm32-uboot","arm64-uboot","riscv32-efi","riscv64-http","loongarch64-efi","riscv64-efi","hp-rmp"];
     async Task ImportIso(){
         var trusted=trustLocalIso.IsChecked==true;trustLocalIso.IsChecked=false;
         var picked=await StorageProvider.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions{Title=Tr("导入 ISO"),AllowMultiple=false,FileTypeFilter=new[]{new Avalonia.Platform.Storage.FilePickerFileType("ISO"){Patterns=new[]{"*.iso"}}}});
@@ -158,31 +158,6 @@ public class MainWindow : Window {
     }
 
     static bool ActionableDiagnostic(BootDiagnostic d)=>d.Code is not ("BOOT_CONFIG_FAMILY_LAYOUT" or "UOS_MANUAL_ONLY");
-    async Task ShowImageDetails(Profile? p){
-        if(p is null)return;var form=new FormWindow(Tr("镜像详情"));
-        void Field(string label,string value,bool multiline=false){if(!string.IsNullOrWhiteSpace(value))form.Text(Tr(label),value,multiline).IsReadOnly=true;}
-        if(p.SecureBoot is {Eligible:true} support){
-            form.Section(T("启动设置","Boot settings"));
-            var toggle=form.Check(T("安全启动支持","Secure Boot support"),support.Enabled);
-            var detail=new TextBlock{Text=Strings.Message(support.Detail),TextWrapping=Avalonia.Media.TextWrapping.Wrap};form.Add(detail);
-            var results=form.Text(T("查看检查结果","View check results"),"",true);results.IsReadOnly=true;
-            var methods=new StackPanel{Spacing=6};form.Add(methods);
-            var note=new TextBlock{Text=T("实际启动取决于设备信任与镜像兼容性。","Booting depends on device trust and image compatibility."),TextWrapping=Avalonia.Media.TextWrapping.Wrap};form.Add(note);
-            var recheck=new Button{Content=T("重新检测","Check again")};form.Add(recheck);
-            bool updating=false,loading=true;
-            void Render(){updating=true;methods.Children.Clear();methods.IsVisible=support.Enabled;recheck.IsEnabled=!loading;
-                if(support.Enabled){methods.Children.Add(new TextBlock{Text=T("启动方式","Boot method")});var choices=support.Modes??["media-native"];foreach(var mode in choices){var label=mode=="signed-ipxe"?T("iPXE shim（使用签名 iPXE 引导）","iPXE shim (signed iPXE)"):T("原生网络启动（使用镜像内组件）","Native network boot (image components)");if(choices.Length>1){var radio=new RadioButton{Content=label,GroupName="secure-boot-method",IsChecked=mode==support.Mode,IsEnabled=!loading};radio.IsCheckedChanged+=async(_,_)=>{if(!updating&&radio.IsChecked==true)await ChangeMode(mode);};methods.Children.Add(radio);}else methods.Children.Add(new TextBlock{Text=label});}methods.Children.Add(new TextBlock{Text=T("对后续启动生效","Applies to subsequent boots")});}
-                toggle.IsChecked=support.Enabled;toggle.IsEnabled=!loading&&(support.Enabled||support.State=="passed");detail.Text=loading?T("正在准备或检查…","Preparing or checking…"):Strings.Message(support.Detail);results.Text=string.Join("\n\n",support.Components.Select(c=>$"{c.File}\n{c.Signer}\n{c.Issuer}\nSHA-256: {c.Sha256}\n{c.CertificateSha256}"));updating=false;}
-            async Task Load(){loading=true;Render();try{support=await api.SecureBoot(p.Id);}catch(Exception e){status.Text=Strings.Message(e.Message);}finally{loading=false;Render();}}
-            async Task Change(){var enabled=toggle.IsChecked==true;loading=true;Render();try{await api.Send($"/api/profiles/{p.Id}/secure-boot",new{enabled},HttpMethod.Put);await Refresh();}catch(Exception e){status.Text=Strings.Message(e.Message);}finally{await Load();}}
-            async Task ChangeMode(string mode){loading=true;Render();try{await api.Send($"/api/profiles/{p.Id}/secure-boot",new{enabled=true,mode},HttpMethod.Put);await Refresh();}catch(Exception e){status.Text=Strings.Message(e.Message);}finally{await Load();}}
-            recheck.Click+=async(_,_)=>{loading=true;Render();try{await api.Send($"/api/profiles/{p.Id}/secure-boot/check",new{});}catch(Exception e){status.Text=Strings.Message(e.Message);}finally{await Load();}};
-            Render();form.Opened+=async(_,_)=>await Load();toggle.IsCheckedChanged+=async(_,_)=>{if(!updating)await Change();};
-        }
-        Field("名称",p.Name);Field("架构",p.Architecture);Field("类型",p.Kind);Field("目录",p.Root);Field("镜像文件",p.Media);
-        if(p.BootEvidence is BootEvidence e){Field("入口",e.Entry);Field("启动配置",e.Config);Field("内核",e.Kernel);Field("Initrd",e.Initrd);Field("安装源",SourceLabel(e.Source));foreach(var d in (e.Diagnostics??[]).Where(ActionableDiagnostic))Field(d.Code is "SOURCE_REQUIRED" or "SOURCE_UNVERIFIED"?"需要配置安装源":d.Code=="SOURCE_STAGE2_MISSING"?"缺少第二阶段文件":d.Code=="SOURCE_REPOSITORY_MISSING"?"未找到软件仓库索引":"需要处理的问题",Strings.Message(d.Detail));}
-        Field("参数",p.Arguments,true);Field("启动文件映射",string.Join("\n",p.BootFiles.Select(pair=>$"{pair.Key}={pair.Value}")),true);await form.ShowDialog<bool>(this);
-    }
     static string SourceLabel(string source)=>source switch{"http-tree"=>Tr("HTTP 安装树"),"http-iso"=>Tr("HTTP 原盘"),"nfs-tree"=>Tr("只读 NFS 文件树"),"nbd"=>Tr("只读 NBD 原盘"),"external"=>Tr("外部安装源"),"local-media"=>Tr("需要本地介质"),_=>Tr("未识别安装源")};
     Button Action(string name,Func<Task> action) {var b=new Button{Content=name};b.Click+=async (_,_)=>await Run(action);return b;}
     async Task CheckNetwork(bool authorize) {
@@ -244,7 +219,67 @@ public class MainWindow : Window {
     }
     async Task EditToken(){var form=new FormWindow(Tr("管理令牌"));var input=form.Text(Tr("管理令牌"),App.ApiToken??"");input.PasswordChar='●';var save=form.Check(Tr("安全保存令牌"),true);if(await form.ShowDialog<bool>(this)){App.ApiToken=input.Text?.Trim();var endpoint=Environment.GetEnvironmentVariable("NETBOOT_API")!;if(save.IsChecked==true&&!string.IsNullOrEmpty(App.ApiToken)){if(!TokenStore.Save(endpoint,App.ApiToken)){TokenStore.Remove(endpoint);await ShowFailure(Tr("无法安全保存令牌"));}}else TokenStore.Remove(endpoint);await Refresh();}}
     async Task EditDevice(Device? source){if(current==null)return;var d=source is null?new Device():source with{};var form=new FormWindow(Tr("设备"));form.Note(Tr("至少填写 MAC 或 IP"));var mac=form.Text("MAC",d.Mac);var ip=form.Text("IP",d.Ip??"");var name=form.Text(Tr("名称"),d.Name);var model=form.Text(Tr("型号"),d.Model);var options=new[]{new Profile{Name=Tr("未分配")}}.Concat(current.Profiles).ToArray();var profiles=form.Choose(Tr("启动镜像"),options,Array.FindIndex(options,p=>p.Id==d.ProfileId));if(await form.ShowDialog<bool>(this)){if(string.IsNullOrWhiteSpace(mac.Text)&&string.IsNullOrWhiteSpace(ip.Text))throw new Exception(Tr("至少填写 MAC 或 IP"));d.Name=name.Text??"";d.Mac=mac.Text?.Trim()??"";d.Ip=string.IsNullOrWhiteSpace(ip.Text)?null:ip.Text.Trim();d.Model=model.Text??"";d.ProfileId=(profiles.SelectedItem as Profile)?.Id;if(d.ProfileId=="")d.ProfileId=null;await api.Send("/api/devices",d);await Refresh();}}
-    async Task EditProfile(Profile? source){var p=source is null?new Profile{Id=Guid.NewGuid().ToString("N")}:source with{};var f=new FormWindow(Strings.Tr("高级手动配置"));var name=f.Text(Strings.Tr("名称"),p.Name);var arch=f.Text(Strings.Tr("架构"),p.Architecture);var kindKeys=new[]{"linux","bsd","windows","windows-pe-iso","fit","raw","solaris"};var kind=f.Choose(Strings.Tr("类型"),kindKeys.Select(k=>k=="windows-pe-iso"?Strings.Tr("Windows PE 系统盘"):k).ToArray(),Array.IndexOf(kindKeys,p.Kind));var root=f.Text(Strings.Tr("目录"),p.Root);var kernel=f.Text(Strings.Tr("内核 / 引导程序"),p.Kernel);var initrd=f.Text("Initrd",p.Initrd);var dtb=f.Text("DTB",p.Dtb);var args=f.Text(Strings.Tr("参数"),p.Arguments);var mapping=f.Text(Strings.Tr("启动文件映射"),string.Join("\n",p.BootFiles.Select(k=>$"{k.Key}={k.Value}")),true);if(await f.ShowDialog<bool>(this)){p.Name=name.Text??"";p.Architecture=arch.Text??"";p.Kind=kind.SelectedIndex>=0?kindKeys[kind.SelectedIndex]:"raw";p.Root=root.Text??"";p.Kernel=kernel.Text??"";p.Initrd=initrd.Text??"";p.Dtb=dtb.Text??"";p.Arguments=args.Text??"";p.BootFiles=(mapping.Text??"").Split('\n',StringSplitOptions.RemoveEmptyEntries).Select(line=>line.Split('=',2)).ToDictionary(parts=>parts[0].Trim(),parts=>parts.Length==2?parts[1].Trim():throw new Exception(Tr("请按 x64-efi=bootx64.efi 的格式填写，每行一项")));await api.Send("/api/profiles",p);await Refresh();}}
+    async Task EditProfile(Profile? source){
+        var p=source is null?new Profile{Id=Guid.NewGuid().ToString("N")}:source with{};
+        if(source is not null && p.SecureBoot?.Eligible==true)p.SecureBoot=await api.SecureBoot(p.Id);
+        var secured=p.SecureBoot?.Enabled==true;
+        var f=new FormWindow(T("镜像设置","Image settings"),Tr("保存"));
+        f.Section(T("基本信息","General"));
+        var name=f.Text(Tr("名称"),p.Name);
+        if(!string.IsNullOrEmpty(p.Media))f.Text(Tr("镜像文件"),p.Media).IsReadOnly=true;
+        var parameterInfo=source is null?null:await api.Parameters(p.Id);
+        var parameterGroup=f.BeginGroup();parameterGroup.IsVisible=parameterInfo?.Editable??true;
+        f.Section(T("启动参数","Boot parameters"));
+        var args=f.Text(p.Kind=="linux"?T("内核命令行","Kernel command line"):T("启动参数","Boot parameters"),p.Arguments,true);args.TextWrapping=Avalonia.Media.TextWrapping.Wrap;
+        if(p.Kind=="windows")f.Note(T("Windows 参数示例：bootlog=on sos=on；多启动项使用 entry={GUID} 指定。","Windows options: bootlog=on sos=on; use entry={GUID} for multiple boot entries."));
+        if(source is not null){
+            var info=parameterInfo!;
+            var reset=Action(T("恢复导入时参数","Restore imported parameters"),()=>{args.Text=info.OriginalArguments;return Task.CompletedTask;});reset.IsEnabled=info.OriginalArguments is not null&&info.Editable;f.Add(reset);
+            var preview=new TextBox{IsReadOnly=true,AcceptsReturn=true,MinHeight=100,TextWrapping=Avalonia.Media.TextWrapping.Wrap};
+            var expanded=new Expander{Header=T("参数预览","Parameter preview"),Content=preview,HorizontalAlignment=HorizontalAlignment.Stretch};
+            f.Add(Action(T("查看参数预览","Preview parameters"),async()=>{var result=await api.Parameters(p.Id,p with{Arguments=args.Text??""});preview.Text=result.Preview;expanded.IsExpanded=true;}));f.Add(expanded);
+            if(info.OriginalArguments is null)f.Note(T("此镜像没有导入参数记录。","Imported parameter defaults are unavailable for this image."));
+        }
+        f.EndAdvanced();
+        CheckBox? secureToggle=null;ComboBox? secureMode=null;
+        var modes=p.SecureBoot?.Modes??[];
+        if(p.SecureBoot?.Eligible==true){
+            f.Section(T("启动设置","Boot settings"));
+            secureToggle=f.Check(T("安全启动支持","Secure Boot support"),secured);
+            if(p.Kind=="windows-pe-iso")secureToggle.IsCheckedChanged+=(_,_)=>parameterGroup.IsVisible=parameterInfo?.Editable==true&&secureToggle.IsChecked==true;
+            secureMode=f.Choose(T("启动方式","Boot method"),modes.Select(mode=>mode=="signed-ipxe"?"iPXE shim":T("原生网络启动","Native network boot")).ToArray(),Array.IndexOf(modes,p.SecureBoot.Mode));
+            f.Note(Strings.Message(p.SecureBoot.Detail));
+            f.BeginAdvanced(T("查看检查结果","View check results"));
+            foreach(var c in p.SecureBoot.Components)f.Text(c.File,string.Join("\n",c.Signer,c.Issuer,"SHA-256: "+c.Sha256,c.CertificateSha256),true).IsReadOnly=true;
+            f.EndAdvanced();
+        }
+        f.BeginAdvanced(T("高级设置","Advanced settings"));
+        var arch=f.Text(Tr("架构"),p.Architecture);arch.IsReadOnly=secured;
+        var kindKeys=new[]{"linux","bsd","windows","windows-pe-iso","windows-ris","fit","raw","solaris"};
+        var kind=f.Choose(Tr("类型"),kindKeys.Select(k=>k=="windows-pe-iso"?Tr("Windows PE 系统盘"):k).ToArray(),Array.IndexOf(kindKeys,p.Kind));kind.IsEnabled=!secured;
+        if(source is null)kind.SelectionChanged+=(_,_)=>parameterGroup.IsVisible=kind.SelectedIndex>=0&&kindKeys[kind.SelectedIndex]!="windows-pe-iso";
+        var root=f.Text(Tr("目录"),p.Root);root.IsReadOnly=secured;
+        var kernel=f.Text(Tr("内核 / 引导程序"),p.Kernel);kernel.IsReadOnly=secured;
+        var initrd=f.Text("Initrd",p.Initrd);initrd.IsReadOnly=secured;
+        var dtb=f.Text("DTB",p.Dtb);dtb.IsReadOnly=secured;
+        var mapping=f.Text(Tr("启动文件映射"),string.Join("\n",p.BootFiles.Select(k=>$"{k.Key}={k.Value}")),true);mapping.IsReadOnly=secured;
+        if(p.BootEvidence is BootEvidence e){
+            f.Section(T("识别与检查结果","Detection and check results"));
+            foreach(var pair in new[]{(Tr("入口"),e.Entry),(Tr("启动配置"),e.Config),(Tr("内核"),e.Kernel),("Initrd",e.Initrd),(Tr("安装源"),SourceLabel(e.Source))})if(!string.IsNullOrEmpty(pair.Item2))f.Text(pair.Item1,pair.Item2).IsReadOnly=true;
+            foreach(var diagnostic in (e.Diagnostics??[]).Where(ActionableDiagnostic))f.Text(Tr("需要处理的问题"),Strings.Message(diagnostic.Detail),true).IsReadOnly=true;
+        }
+        f.OnSave=async()=>{
+          try {
+            p.Name=name.Text??"";p.Arguments=args.Text??"";
+            p.Architecture=arch.Text??"";p.Kind=kind.SelectedIndex>=0?kindKeys[kind.SelectedIndex]:"raw";p.Root=root.Text??"";p.Kernel=kernel.Text??"";p.Initrd=initrd.Text??"";p.Dtb=dtb.Text??"";
+            p.BootFiles=(mapping.Text??"").Split('\n',StringSplitOptions.RemoveEmptyEntries).Select(line=>line.Split('=',2)).ToDictionary(parts=>parts[0].Trim(),parts=>parts.Length==2?parts[1].Trim():throw new Exception(Tr("请按 x64-efi=bootx64.efi 的格式填写，每行一项")));
+            if(source is null)await api.Send("/api/profiles",p);
+            else await api.Send($"/api/profiles/{p.Id}/settings",new{profile=p,secure_boot=secureToggle is null?null:new{enabled=secureToggle.IsChecked==true,mode=secureMode is not null&&secureMode.SelectedIndex>=0?modes[secureMode.SelectedIndex]:p.SecureBoot?.Mode}},HttpMethod.Put);
+            await Refresh();return true;
+          }catch(Exception error){f.ShowError(Strings.Message(error.Message));return false;}
+        };
+        await f.ShowDialog<bool>(this);
+    }
     async Task Network(){
         if(current==null)return;
         var settings=System.Text.Json.Nodes.JsonNode.Parse(current.Settings.GetRawText())!;
@@ -342,10 +377,13 @@ public class MainWindow : Window {
 }
 class FormWindow:Window {
     readonly StackPanel fields=new(){Spacing=10,Margin=new Thickness(22)};
+    public Func<Task<bool>>? OnSave;
+    readonly TextBlock error=new(){TextWrapping=Avalonia.Media.TextWrapping.Wrap};
+    public void ShowError(string message){error.Text=message;}
     StackPanel? advanced;
     Control? buttons;
     StackPanel Fields=>advanced??fields;
-    public FormWindow(string title,string? confirmLabel=null){Title=title;Width=520;Height=600;WindowStartupLocation=WindowStartupLocation.CenterOwner;var root=new DockPanel();var bar=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right,Spacing=8,Margin=new Thickness(20)};var cancel=new Button{Content=Strings.Tr("取消")};cancel.Click+=(_,_)=>Close(false);var save=new Button{Content=confirmLabel??Strings.Tr("确定")};save.Click+=(_,_)=>Close(true);bar.Children.Add(cancel);bar.Children.Add(save);buttons=bar;DockPanel.SetDock(bar,Dock.Bottom);root.Children.Add(bar);root.Children.Add(new ScrollViewer{Content=fields});Content=root;}
+    public FormWindow(string title,string? confirmLabel=null){fields.Children.Add(error);Title=title;Width=520;Height=600;WindowStartupLocation=WindowStartupLocation.CenterOwner;var root=new DockPanel();var bar=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right,Spacing=8,Margin=new Thickness(20)};var cancel=new Button{Content=Strings.Tr("取消")};cancel.Click+=(_,_)=>Close(false);var save=new Button{Content=confirmLabel??Strings.Tr("确定")};save.Click+=async(_,_)=>{if(OnSave is null){Close(true);return;}SetBusy(true);try{if(await OnSave())Close(true);}finally{SetBusy(false);}};bar.Children.Add(cancel);bar.Children.Add(save);buttons=bar;DockPanel.SetDock(bar,Dock.Bottom);root.Children.Add(bar);root.Children.Add(new ScrollViewer{Content=fields});Content=root;}
     public TextBox Text(string label,string value,bool multiline=false){Fields.Children.Add(new TextBlock{Text=label});var box=new TextBox{Text=value,AcceptsReturn=multiline,MinHeight=multiline?110:32};Fields.Children.Add(box);return box;}
     public void Add(Control control)=>Fields.Children.Add(control);
     public void Section(string title)=>Fields.Children.Add(new TextBlock{Text=title,FontWeight=Avalonia.Media.FontWeight.SemiBold,Margin=new Thickness(0,14,0,0)});
@@ -353,6 +391,8 @@ class FormWindow:Window {
     public ComboBox Choose<T>(string label,T[] values,int selected){Fields.Children.Add(new TextBlock{Text=label});var box=new ComboBox{ItemsSource=values,SelectedIndex=Math.Max(0,selected),HorizontalAlignment=HorizontalAlignment.Stretch};Fields.Children.Add(box);return box;}
     public CheckBox Check(string label,bool value){var box=new CheckBox{Content=label,IsChecked=value};Fields.Children.Add(box);return box;}
     public void SetBusy(bool busy){if(buttons is not null)buttons.IsEnabled=!busy;}
+    public StackPanel BeginGroup(){advanced=new StackPanel{Spacing=10};fields.Children.Add(advanced);return advanced;}
+    public void EndAdvanced()=>advanced=null;
     public void BeginAdvanced(string title){advanced=new StackPanel{Spacing=10};fields.Children.Add(new Expander{Header=title,Content=advanced,HorizontalAlignment=HorizontalAlignment.Stretch});}
 
 }

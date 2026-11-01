@@ -199,7 +199,7 @@ fn alpha(profile: &Profile, settings: &Settings, chinese: bool) -> ManualBoot {
             "show device\nboot -protocols bootp <net-device> -file bootah-srm.bin",
             vec![
                 note(chinese, "Replace <net-device> with the firmware-supported Ethernet device from show device (for example ewa0, ewb0 or era0). Check the machine manual for console-specific syntax. The small loader downloads the Debian kernel and initrd separately.", "把 <net-device> 替换为 show device 列出的固件支持的以太网设备（如 ewa0、ewb0 或 era0），并按该机型手册核对控制台语法。小型引导器分别下载 Debian 内核和 initrd。"),
-                note(chinese, "With external DHCP, configure a BOOTP reservation, boot server and filename there; SRM does not use PXE ProxyDHCP.", "已有 DHCP 时，请在外部服务器配置 BOOTP 地址、启动服务器及文件名；SRM 不使用 PXE ProxyDHCP。"),
+                note(chinese, "SRM first needs static firmware network settings or BOOTP to load the small loader. The loader then supports ordinary DHCP plus Bootah ProxyDHCP.", "SRM 首先需要静态固件网络设置或 BOOTP 来加载小引导器；之后引导器支持普通 DHCP 加 Bootah ProxyDHCP。"),
                 note(chinese, "Each target platform requires separate validation; ES40 results do not certify other Alpha systems.", "目标平台必须单独验证；ES40 的验收结果不代表其他 Alpha 平台已通过。"),
             ],
         );
@@ -312,6 +312,16 @@ fn sgi(chinese: bool) -> ManualBoot {
     )
 }
 fn openbios(profile: &Profile, settings: &Settings, chinese: bool) -> ManualBoot {
+    if crate::openbsd::network_root(profile) && !crate::sparc_obp::enabled(profile) {
+        return manual("openboot", "OpenBSD SPARC64 OpenBoot", "unverified", "boot net bsd.rd", vec![note(chinese,
+            "原厂 OpenBoot 通过 RARP/TFTP 加载原版 ofwboot.net，再经 bootparams/NFS 加载 bsd.rd。请开启以太网协议、绑定静态 IP 和镜像；真机启动待验收。",
+            "OpenBoot loads original ofwboot.net through RARP/TFTP, then bsd.rd through bootparams/NFS. Enable Ethernet protocols and assign a static IP and image. Hardware boot validation is pending.")]);
+    }
+    if crate::sparc_obp::enabled(profile) {
+        return manual("openboot", "SPARC64 OpenBoot", "unverified", "boot net", vec![note(chinese,
+            "原厂 OpenBoot 通过 RARP/TFTP 加载 Bootah 二阶段，再以 DHCP/ProxyDHCP 获取 GRUB 或原版 BSD 引导器及内核参数。请分配镜像并开启以太网协议与 DHCP 或 ProxyDHCP；已设置 IP 优先，否则自动申请 RARP 地址。真机验收待完成。",
+            "OpenBoot loads Bootah through RARP/TFTP; DHCP/ProxyDHCP then selects GRUB or the original BSD loader and kernel arguments. Assign an image and enable Ethernet protocols and DHCP or ProxyDHCP. A configured IP takes priority; otherwise Bootah obtains a RARP address automatically. Hardware validation is pending.")]);
+    }
     let (commands, mut notes) = if settings.dhcp_enabled {
         (
             "boot net:dhcp",
@@ -597,6 +607,12 @@ pub fn virtual_file(
     settings: &Settings,
     auto: Option<&AutoConfig>,
 ) -> Option<Vec<u8>> {
+    if name == "bootah-obp.bin" && crate::sparc_obp::enabled(profile) {
+        return Some(crate::sparc_obp::LOADER.to_vec());
+    }
+    if name == "bootah-obp.cfg" {
+        return crate::sparc_obp::native_config(profile, settings, auto);
+    }
     if name == "bootah-srm.cfg" {
         return crate::alpha_srm::config(profile, settings, auto);
     }
@@ -630,6 +646,7 @@ pub fn virtual_file(
             let arguments = crate::automation::arguments(profile, settings, auto);
             return Some(format!("set timeout=0\nset default=0\nmenuentry 'Bootah' {{\n linux /{} {}\n initrd /{}\n}}\n", profile.kernel, arguments, profile.initrd).into_bytes());
         }
+        if let Some(config) = crate::sparc_obp::grub(profile, settings, auto) { return Some(config); }
         if let Some(config) = crate::native_uefi::grub(profile, settings, auto) {
             return Some(config);
         }

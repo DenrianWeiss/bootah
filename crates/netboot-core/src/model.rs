@@ -159,6 +159,8 @@ pub struct Event {
     pub message: String,
 }
 pub struct Store {
+    pub portmap_sender: std::sync::Weak<std::net::UdpSocket>,
+    pub boot_addresses: BTreeMap<Ipv4Addr, (String, u64)>,
     pub config: Config,
     pub events: Vec<Event>,
     pub path: PathBuf,
@@ -217,32 +219,47 @@ pub fn architecture(code: u16) -> &'static str {
         _ => "unknown",
     }
 }
+pub const FIRMWARE_ARCHITECTURES: &[&str] = &[
+    "x86-bios",
+    "ia64",
+    "ia32-efi",
+    "x64-efi",
+    "ebc-efi",
+    "alpha",
+    "sparc64",
+    "powerpc-of",
+    "powerpc-epapr",
+    "power-opal",
+    "arm32-efi",
+    "arm64-efi",
+    "ia32-http",
+    "x64-http",
+    "arm32-http",
+    "arm64-http",
+    "arm32-uboot",
+    "arm64-uboot",
+    "riscv32-efi",
+    "riscv64-http",
+    "loongarch64-efi",
+    "riscv64-efi",
+    "hp-rmp",
+];
 pub fn known_firmware_architecture(name: &str) -> bool {
-    matches!(
-        name,
-        "x86-bios"
-            | "ia64"
-            | "ia32-efi"
-            | "x64-efi"
-            | "ebc-efi"
-            | "alpha"
-            | "powerpc-of"
-            | "powerpc-epapr"
-            | "power-opal"
-            | "arm32-efi"
-            | "arm64-efi"
-            | "ia32-http"
-            | "x64-http"
-            | "arm32-http"
-            | "arm64-http"
-            | "arm32-uboot"
-            | "arm64-uboot"
-            | "riscv32-efi"
-            | "riscv64-http"
-            | "loongarch64-efi"
-            | "riscv64-efi"
-            | "hp-rmp"
-    )
+    FIRMWARE_ARCHITECTURES.contains(&name)
+}
+pub fn normalize_firmware_files(profile: &mut Profile) {
+    if known_firmware_architecture(&profile.architecture) {
+        if let Some(entry) = profile.boot_files.get("default").cloned() {
+            profile.boot_files.entry(profile.architecture.clone()).or_insert(entry);
+        }
+    }
+    let rmp = profile.boot_files.get("rmp").cloned().or_else(|| {
+        matches!(profile.architecture.as_str(), "hppa" | "hppa64")
+            .then(|| profile.boot_files.get("default").cloned()).flatten()
+    });
+    if let Some(entry) = rmp {
+        profile.boot_files.entry("hp-rmp".into()).or_insert(entry);
+    }
 }
 impl Store {
     pub fn open(path: PathBuf) -> Result<Shared, String> {
@@ -254,12 +271,18 @@ impl Store {
             config.settings.dhcp_auto = true;
             config
         };
+        for profile in &mut config.profiles {
+            normalize_firmware_files(profile);
+            crate::sparc_obp::upgrade_native(profile);
+        }
         if matches!(config.settings.smb_mode.as_str(), "smb1" | "smb2") { config.settings.smb_mode = "auto".into(); }
         #[cfg(target_os = "windows")]
         {
             config.settings.interface = crate::network::windows_capture_id(&config.settings.interface);
         }
         Ok(Arc::new(Mutex::new(Self {
+            portmap_sender: Default::default(),
+            boot_addresses: BTreeMap::new(),
             config,
             events: vec![],
             path,
@@ -616,6 +639,11 @@ impl Store {
     }
     pub fn device_for(&self, address: Ipv4Addr) -> Option<&Device> {
         let observed = crate::neighbors::cached_mac(address, &self.config.settings.interface);
+        if let Some((mac, _)) = self.boot_addresses.get(&address).filter(|(_, until)| *until > now()) {
+            if observed.as_ref().is_some_and(|actual| actual != mac)
+                || self.config.devices.iter().any(|d| d.ip == Some(address) && d.mac != *mac) { return None; }
+            return self.config.devices.iter().find(|d| d.mac == *mac);
+        }
         if let Some(device) = self.config.devices.iter().find(|d| d.ip == Some(address)) {
             if device.mac.is_empty() || observed.as_ref().is_none_or(|mac| mac == &device.mac) {
                 return Some(device);
@@ -828,5 +856,79 @@ mod association_tests {
         drop(state);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("events.jsonl"));
+    }
+}
+
+#[cfg(test)]
+mod sparc_defaults_tests {
+    use super::*;
+    #[test]
+    fn legacy_sparc_profiles_gain_default_key_without_replacing_explicit_entry() {
+        let root = std::env::temp_dir().join(format!("bootah-sparc-defaults-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut config = Config::default();
+        for (id, arch, files) in [
+            ("legacy", "sparc64", serde_json::json!({"default":"ofwboot.net"})),
+            ("explicit", "sparc64", serde_json::json!({"default":"inetboot-sun4u","sparc64":"inetboot-sun4v"})),
+            ("other", "alpha", serde_json::json!({"default":"netboot"})),
+        ] {
+            config.profiles.push(serde_json::from_value(serde_json::json!({"id":id,"name":id,"architecture":arch,"kind":"bsd","root":root,"boot_files":files})).unwrap());
+        }
+        config.default_profiles.insert("sparc64".into(), "legacy".into());
+        let path = root.join("state.json");
+        std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+        let state = Store::open(path.clone()).unwrap();
+        {
+            let s = state.lock().unwrap();
+            assert!(known_firmware_architecture("sparc64"));
+            assert_eq!(s.config.profiles[0].boot_files["sparc64"], "ofwboot.net");
+            assert_eq!(s.config.profiles[1].boot_files["sparc64"], "inetboot-sun4v");
+            assert!(!s.config.profiles[2].boot_files.contains_key("sparc64"));
+            assert_eq!(s.config.default_profiles["sparc64"], "legacy");
+            s.save().unwrap();
+        }
+        assert_eq!(Store::open(path).unwrap().lock().unwrap().config.profiles[0].boot_files["sparc64"], "ofwboot.net");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod firmware_catalog_tests {
+    use super::*;
+    #[test]
+    fn clients_dhcp_and_efi_share_the_firmware_catalog() {
+        let expected: std::collections::BTreeSet<_> = FIRMWARE_ARCHITECTURES.iter().copied().collect();
+        assert_eq!(expected.len(), FIRMWARE_ARCHITECTURES.len());
+        for (source, marker, end) in [
+            (include_str!("../../../apps/macos/Sources/Netboot/Netboot.swift"), "static let all:Set<String> = [", ']'),
+            (include_str!("../../../apps/desktop/MainWindow.cs"), "static readonly HashSet<string> FirmwareKeys=[", ']'),
+            (include_str!("../../../apps/android/app/src/main/java/work/premutation/bootah/MainActivity.kt"), "private val firmwareKeys=setOf(", ')'),
+        ] {
+            let list = source.split_once(marker).unwrap().1.split_once(end).unwrap().0;
+            let keys: std::collections::BTreeSet<_> = list.split('"').skip(1).step_by(2).collect();
+            assert_eq!(keys, expected);
+        }
+        for loader in crate::efi::DEFAULT_LOADERS { assert!(expected.contains(loader.firmware_key)); }
+        for code in 0..=u16::MAX {
+            let key = architecture(code);
+            if key != "unknown" { assert!(expected.contains(key), "DHCP code {code}: {key}"); }
+        }
+        assert!(expected.contains("loongarch64-efi"));
+    }
+    #[test]
+    fn legacy_boot_files_gain_firmware_aliases_without_guessing_cpu_boot_mode() {
+        for (arch, files, key, filename) in [
+            ("alpha", serde_json::json!({"default":"bootah-srm.bin"}), "alpha", "bootah-srm.bin"),
+            ("hppa64", serde_json::json!({"default":"boot.lif"}), "hp-rmp", "boot.lif"),
+            ("hppa", serde_json::json!({"rmp":"rmp.lif","default":"other.lif"}), "hp-rmp", "rmp.lif"),
+            ("hppa", serde_json::json!({"rmp":"rmp.lif","hp-rmp":"explicit.lif"}), "hp-rmp", "explicit.lif"),
+        ] {
+            let mut p: Profile = serde_json::from_value(serde_json::json!({"id":"p","name":"p","architecture":arch,"kind":"raw","root":".","boot_files":files})).unwrap();
+            normalize_firmware_files(&mut p);
+            assert_eq!(p.boot_files[key], filename);
+        }
+        let mut p: Profile = serde_json::from_value(serde_json::json!({"id":"p","name":"p","architecture":"loongarch64","kind":"linux","root":".","boot_files":{"default":"kernel"}})).unwrap();
+        normalize_firmware_files(&mut p);
+        assert!(!p.boot_files.contains_key("loongarch64-efi"));
     }
 }

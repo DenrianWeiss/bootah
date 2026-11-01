@@ -89,7 +89,7 @@ pub fn prepare(
     let overlay = cache.join("overlay");
     let client = overlay.join("usr/bin/bootah-media");
     fs::create_dir_all(client.parent().unwrap()).map_err(err)?;
-    fs::copy(crate::linux_compat::client(architecture)?, &client).map_err(err)?;
+    fs::copy(crate::linux_compat::client_for_initrd(original, architecture)?, &client).map_err(err)?;
     let hook = overlay.join("scripts/casper-premount/05bootah-media");
     fs::create_dir_all(hook.parent().unwrap()).map_err(err)?;
     fs::write(&hook, HOOK).map_err(err)?;

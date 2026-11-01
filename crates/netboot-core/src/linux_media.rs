@@ -636,7 +636,7 @@ pub fn prepare(
             .to_string();
         let automatic_compat = !linux_compat
             && matches!(family, "debian-cd" | "aosc-livekit")
-            && matches!(architecture.as_str(), "x64" | "ppc64le");
+            && crate::linux_compat::supported(&architecture);
         let linux_compat = linux_compat || automatic_compat;
         let mut note = format!("Detected {family}; original ISO retained, files served on demand.");
         if family == "debian-netboot" && !entries.keys().any(|p| p.starts_with("dists/")) {
@@ -675,6 +675,9 @@ pub fn prepare(
                 fs::copy(path, root.join(asset)).map_err(|e| e.to_string())?;
                 boot_files.insert(key.into(), asset.into());
             }
+        }
+        if architecture == "sparc64" {
+            crate::sparc_obp::prepare(root, &mut boot_files)?;
         }
         if architecture == "ppc64le" {
             if let Some(path) = crate::media::asset("grub-powerpc.elf") {

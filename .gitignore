@@ -4,6 +4,9 @@
 /release/
 /assets/*
 !/assets/.gitkeep
+!/assets/signed-ipxe.json
+!/assets/bootah-srm.bin
+!/assets/bootah-obp.bin
 /state.json
 **/bin/
 **/obj/
@@ -16,3 +19,4 @@
 
 **/src/main/assets/boot/
 /apps/android/app/src/main/assets/licenses/
+/AGENTS.md

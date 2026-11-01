@@ -376,7 +376,7 @@ fn portmap_reply_ports(
 
 /// Start RFC1057 UDP and TCP discovery, returning handles owned by the caller.
 /// Bind failures propagate instead of silently falling back to a private port.
-async fn portmapper_assigned(
+pub(crate) async fn portmapper_assigned(
     bind: &str,
     nfs_port: u16,
     state: Option<crate::model::Shared>,
@@ -391,6 +391,12 @@ async fn portmapper_assigned(
         .map_err(|e: std::net::AddrParseError| e.to_string())?;
     let udp = crate::privilege::udp((*address.ip(), address.port())).await?;
     let tcp = crate::privilege::tcp((*address.ip(), address.port())).await?;
+    let sender = std::sync::Arc::new(udp.into_std().map_err(|e| e.to_string())?);
+    let udp = tokio::net::UdpSocket::from_std(sender.try_clone().map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    if let Some(state) = &state {
+        state.lock().map_err(|e| e.to_string())?.portmap_sender = std::sync::Arc::downgrade(&sender);
+    }
     let tcp_state = state.clone();
     let udp_task = tokio::spawn(async move {
         let mut buf = [0u8; 4096];
@@ -408,7 +414,7 @@ async fn portmapper_assigned(
             if let Some(reply) = callit
                 .or_else(|| portmap_reply_ports(&buf[..n], nfs_port, bootport, mapper_port, true))
             {
-                let _ = udp.send_to(&reply, peer).await;
+                let _ = sender.send_to(&reply, peer);
             }
         }
     });
@@ -668,7 +674,7 @@ pub fn eligible(profile: &crate::model::Profile) -> bool {
                 .split_whitespace()
                 .any(|s| s == "netboot=nfs");
     }
-    if crate::freebsd::network_root(profile) { return true; }
+    if crate::freebsd::network_root(profile) || crate::openbsd::network_root(profile) { return true; }
     if profile.kind == "solaris" {
         return true;
     }

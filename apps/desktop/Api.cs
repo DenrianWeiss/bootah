@@ -38,6 +38,7 @@ public record Profile {
     public BootEvidence? BootEvidence {get;set;}
     public override string ToString() => Name;
 }
+public record ParameterInfo(string? OriginalArguments,bool Editable,bool Applies,string Preview);
 public record SecureBootSupport(bool Eligible,bool Enabled,string State,string Detail,SecureBootComponent[] Components,string? Mode=null,string[]? Modes=null);
 public record SecureBootComponent(string File,string Sha256,string Signer,string Issuer,string CertificateSha256);
 public record BootEvidence(string Config,string Entry,string Kernel,string Initrd,string Source,string Verification,BootDiagnostic[]? Diagnostics=null);
@@ -87,6 +88,7 @@ public class Api {
         using var response=await ((path is "/api/service/start" or "/api/network/detect" || (path.EndsWith("/compatibility")||path.Contains("/secure-boot")))?authorized:client).SendAsync(request);
         if(!response.IsSuccessStatusCode) throw new Exception(await response.Content.ReadAsStringAsync());
     }
+    public async Task<ParameterInfo> Parameters(string id,Profile? draft=null){using var request=new HttpRequestMessage(draft is null?HttpMethod.Get:HttpMethod.Post,$"/api/profiles/{id}/parameters");if(draft is not null)request.Content=JsonContent.Create(draft,options:Json);using var response=await client.SendAsync(request);var text=await response.Content.ReadAsStringAsync();if(!response.IsSuccessStatusCode)throw new Exception(text);return JsonSerializer.Deserialize<ParameterInfo>(text,Json)!;}
     public async Task<SecureBootSupport> SecureBoot(string id){using var client=CreateClient(TimeSpan.FromMinutes(3));using var response=await client.GetAsync($"/api/profiles/{id}/secure-boot");var text=await response.Content.ReadAsStringAsync();if(!response.IsSuccessStatusCode)throw new Exception(text);return JsonSerializer.Deserialize<SecureBootSupport>(text,Json)!;}
     public async Task<ImportResult> Import(string path,bool trustLocalIso=false){using var client=CreateClient(TimeSpan.FromMinutes(30));using var response=await client.PostAsJsonAsync("/api/media/import",new{path,trust_local_iso=trustLocalIso},Json);var text=await response.Content.ReadAsStringAsync();if(!response.IsSuccessStatusCode)throw new Exception(text);return JsonSerializer.Deserialize<ImportResult>(text,Json)!;}
     public Task<string> Uboot(string id)=>client.GetStringAsync($"/api/profiles/{Uri.EscapeDataString(id)}/uboot");

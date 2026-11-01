@@ -50,7 +50,10 @@ fn run() -> Result<(), String> {
     s.set_read_timeout(None).map_err(|e| e.to_string())?;
     s.set_write_timeout(None).map_err(|e| e.to_string())?;
     if a.len() == 6 {
-        return netlink::connect(s.as_raw_fd(), size, flags, &a[5]);
+        if netlink::connect(s.as_raw_fd(), size, flags, &a[5])? {
+            return Ok(());
+        }
+        eprintln!("bootah-media: kernel lacks NBD netlink; using legacy read-only mapping");
     }
     let dev = OpenOptions::new()
         .read(true)
@@ -68,10 +71,22 @@ fn run() -> Result<(), String> {
             Ok(())
         }
     };
-    ioctl(0xab01, 512)?;
-    ioctl(0xab07, size / 512)?;
-    ioctl(0xab0a, 3)?;
-    ioctl(0xab00, s.as_raw_fd() as _)?;
+    ioctl(libc::_IO(0xab, 0x01) as _, 512)?;
+    let blocks = libc::c_ulong::try_from(size / 512)
+        .map_err(|_| "NBD size exceeds this userspace ioctl ABI")?;
+    ioctl(libc::_IO(0xab, 0x07) as _, blocks)?;
+    let flag_result = unsafe { libc::ioctl(fd, libc::_IO(0xab, 0x0a) as _, 3 as libc::c_ulong) };
+    if flag_result < 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::ENOTTY) {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    let readonly = 1i32;
+    if unsafe { libc::ioctl(fd, libc::_IO(0x12, 93) as _, &readonly) } < 0 {
+        return Err(format!(
+            "NBD read-only: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    ioctl(libc::_IO(0xab, 0x00) as _, s.as_raw_fd() as _)?;
     s.set_read_timeout(None).map_err(|e| e.to_string())?;
     s.set_write_timeout(None).map_err(|e| e.to_string())?;
     let mut pipe = [0; 2];
@@ -80,7 +95,7 @@ fn run() -> Result<(), String> {
     }
     let pid = unsafe { libc::fork() };
     if pid < 0 {
-        ioctl(0xab04, 0)?;
+        ioctl(libc::_IO(0xab, 0x04) as _, 0)?;
         return Err(std::io::Error::last_os_error().to_string());
     }
     if pid == 0 {
@@ -132,20 +147,24 @@ fn run() -> Result<(), String> {
             .ok()
             .and_then(|v| v.trim().parse::<u64>().ok())
             == Some(size / 512)
+            && std::fs::read_to_string(format!("/sys/block/{device}/pid"))
+                .ok()
+                .and_then(|v| v.trim().parse::<i32>().ok())
+                == Some(pid)
         {
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(50));
     }
     unsafe {
-        libc::ioctl(fd, 0xab08, 0);
+        libc::ioctl(fd, libc::_IO(0xab, 0x08) as _, 0);
     }
     Err("NBD kernel device did not become ready".into())
 }
 fn worker_exit(fd: i32, status: i32, error: i32) -> ! {
     unsafe {
         libc::write(status, (&error as *const i32).cast(), 4);
-        libc::ioctl(fd, 0xab04, 0);
+        libc::ioctl(fd, libc::_IO(0xab, 0x04) as _, 0);
         libc::_exit(if error == 0 { 0 } else { 1 });
     }
 }
@@ -153,7 +172,7 @@ fn worker(fd: i32, status: i32) -> ! {
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
     }
-    let result = unsafe { libc::ioctl(fd, 0xab03, 0) };
+    let result = unsafe { libc::ioctl(fd, libc::_IO(0xab, 0x03) as _, 0) };
     let error = if result < 0 {
         std::io::Error::last_os_error().raw_os_error().unwrap_or(5)
     } else {

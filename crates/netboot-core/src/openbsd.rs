@@ -8,6 +8,9 @@ pub fn prepare(source: &Path, root: &Path, id: &str) -> Result<Option<ImportResu
         image.materialize(kernel, &cached)?;
         let architecture = crate::media::binary_arch(&cached).unwrap_or("unknown");
         fs::remove_file(&cached).map_err(|e| e.to_string())?;
+        if architecture == "sparc64" {
+            return sparc64(&image, source, root, id, kernel).map(Some);
+        }
         if matches!(architecture, "x86" | "x64" | "arm64") {
             return native(&image, source, root, id, kernel, architecture).map(Some);
         }
@@ -20,6 +23,9 @@ pub fn prepare(source: &Path, root: &Path, id: &str) -> Result<Option<ImportResu
                     .keys()
                     .any(|n| n.ends_with("INSTALL.powerpc64")))
     }) else {
+        if image.entries().keys().any(|p| p.as_str() == "bsd.rd" || p.ends_with("/bsd.rd")) {
+            return Err("OpenBSD installation media was recognized, but its architecture is not supported by this importer.".into());
+        }
         return Ok(None);
     };
     crate::media_source::register(source, root)?;
@@ -131,6 +137,74 @@ fn native(image: &Image, source: &Path, root: &Path, id: &str, kernel: &str, arc
         } else {
             "OpenBSD original installation ramdisk. Installation sets are absent; select a matching external mirror in the installer."
         }.into(),
+        boot_evidence: None,
+    }], warnings })
+}
+
+
+pub fn network_root(p: &Profile) -> bool {
+    if p.system_id != "openbsd" || p.architecture != "sparc64" || p.kind != "bsd" { return false; }
+    let Ok(bytes) = fs::read(p.root.join(".bootah-openbsd-nfs.json")) else { return false; };
+    let Ok(marker) = serde_json::from_slice::<serde_json::Value>(&bytes) else { return false; };
+    marker["version"] == 1 && marker["profile"].as_str() == Some(&p.id)
+}
+
+fn sparc64(image: &Image, source: &Path, root: &Path, id: &str, kernel: &str) -> Result<ImportResult, String> {
+    use std::io::Read;
+    let parent = kernel.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
+    let in_port = |name: &str| if parent.is_empty() { name.into() } else { format!("{parent}/{name}") };
+    if image.find(&in_port("INSTALL.sparc64")).is_none() {
+        return Err("OpenBSD SPARC64 installation notes are missing".into());
+    }
+    crate::media_source::register(source, root)?;
+    image.materialize(kernel, &root.join("bsd.rd"))?;
+    let mut loader = None;
+    if let Some(path) = image.find(&in_port("ofwboot.net")) {
+        loader = Some(image.read(path, 2 * 1024 * 1024)?);
+    } else if let Some(base) = image.entries().keys().find(|p| {
+        p.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("") == parent
+            && p.rsplit('/').next().is_some_and(|n| n.starts_with("base") && n.ends_with(".tgz"))
+    }) {
+        let source = crate::media_source::open(root, base)?;
+        let gzip = flate2::read::GzDecoder::new(source).take(1024 * 1024 * 1024);
+        let mut archive = tar::Archive::new(gzip);
+        for entry in archive.entries().map_err(|e| e.to_string())? {
+            let mut entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path().map_err(|e| e.to_string())?;
+            if path.components().filter(|p| *p != std::path::Component::CurDir).collect::<Vec<_>>()
+                != Path::new("usr/mdec/ofwboot.net").components().collect::<Vec<_>>() { continue; }
+            if !entry.header().entry_type().is_file() || entry.size() > 2 * 1024 * 1024 {
+                return Err("Invalid OpenBSD SPARC64 network loader".into());
+            }
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+            loader = Some(bytes);
+            break;
+        }
+    }
+    let id = format!("{id}-openbsd-sparc64");
+    let mut files = BTreeMap::new();
+    let mut warnings = Vec::new();
+    if let Some(bytes) = loader {
+        if bytes.get(..7) != Some(b"\x7fELF\x02\x02\x01") || crate::media::binary_arch_bytes(&bytes) != Some("sparc64") {
+            return Err("Invalid OpenBSD SPARC64 network loader".into());
+        }
+        fs::write(root.join("ofwboot.net"), bytes).map_err(|e| e.to_string())?;
+        files.insert("default".into(), "ofwboot.net".into());
+        files.insert("sparc64".into(), "ofwboot.net".into());
+        fs::write(root.join(".bootah-openbsd-nfs.json"),
+            serde_json::to_vec(&serde_json::json!({"version":1,"profile":id})).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    } else {
+        warnings.push("OpenBSD SPARC64: release-matched ofwboot.net is missing; use installation media containing the base set.".into());
+    }
+    let missing = files.is_empty();
+    Ok(ImportResult { profiles: vec![Profile {
+        secure_boot: None, system_id: "openbsd".into(), system_name: "OpenBSD".into(),
+        id, name: "OpenBSD sparc64".into(), architecture: "sparc64".into(), kind: "bsd".into(),
+        root: root.into(), boot_files: files, kernel: "bsd.rd".into(), initrd: String::new(), dtb: String::new(), arguments: String::new(),
+        media: source.to_string_lossy().into(), status: if missing { "needs-attention" } else { "prepared" }.into(),
+        notes: crate::sparc_obp::OPENBSD_NOTES.into(),
         boot_evidence: None,
     }], warnings })
 }
