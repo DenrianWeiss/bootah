@@ -3,7 +3,7 @@ use std::{fs, io::Write, path::PathBuf};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = PathBuf::from(std::env::args().nth(1).ok_or("Specify output directory")?);
     fs::create_dir_all(&root)?;
-    let name = format!("目录/{}-complete.bin", "long-name-".repeat(20));
+    let name = format!("directory/{}-complete.bin", "long-name-".repeat(20));
     for (label, revision, partition) in [
         ("vat150", UdfRevision::V150, UdfPartition::Virtual),
         ("vat201", UdfRevision::V201, UdfPartition::Virtual),
@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut image = UdfImage::new();
         image.add_bytes(&name, (0..20_003).map(|n| (n % 251) as u8).collect())?;
         image.add_bytes("empty", vec![])?;
-        image.add_bytes("目录/中文.txt", b"unicode".to_vec())?;
+        image.add_bytes("directory/中文.txt", b"unicode".to_vec())?;
         let options = UdfOptions {
             revision,
             partition,

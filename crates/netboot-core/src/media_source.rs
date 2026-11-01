@@ -1194,7 +1194,7 @@ mod optical_tests {
     }
     #[test]
     fn virtual_sparable_and_metadata_partitions_preserve_names_and_ranges() {
-        let name = format!("目录/{}-complete.bin", "long-name-".repeat(20));
+        let name = format!("directory/{}-complete.bin", "long-name-".repeat(20));
         let expected: Vec<u8> = (0..20_003).map(|n| (n % 251) as u8).collect();
         for (kind, compressed) in [
             (
@@ -1229,7 +1229,7 @@ mod optical_tests {
             assert_eq!(image.filesystem, "udf");
             assert!(image.fallback_reason.is_none());
             assert_eq!(image.read(&name, 21_000).unwrap(), expected, "{kind}");
-            assert_eq!(image.read("目录/中文.txt", 100).unwrap(), b"unicode");
+            assert_eq!(image.read("directory/中文.txt", 100).unwrap(), b"unicode");
             assert!(image.read("empty", 0).unwrap().is_empty());
             let mut resource = image.resource(&name, None).unwrap();
             resource.seek(SeekFrom::Start(3700)).unwrap();

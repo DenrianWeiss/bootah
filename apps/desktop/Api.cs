@@ -58,7 +58,7 @@ public record NetworkReport(NetworkInterfaceInfo[] Interfaces,string Selected,Ne
     public string Summary => string.Join("  ",new[]{Strings.Tr(Status),Selected,string.Join(", ",Servers)}.Where(s=>!string.IsNullOrEmpty(s)));
 }
 public record NetworkChoice(NetworkInterfaceInfo? Interface,NetworkAddress? Address) {
-    public override string ToString()=>Interface is null?Strings.Tr("自动选择网卡"):$"{Interface.Name}  {Address?.Ip??Strings.Tr("No IPv4")}  {Strings.Tr(Interface.Up?"已连接":"未连接网卡")}{(Interface.Physical?"":"  "+Strings.Tr("虚拟网卡"))}";
+    public override string ToString()=>Interface is null?Strings.Tr("Select interface automatically"):$"{Interface.Name}  {Address?.Ip??Strings.Tr("No IPv4")}  {Strings.Tr(Interface.Up?"Connected":"Disconnected")}{(Interface.Physical?"":"  "+Strings.Tr("Virtual/other interface"))}";
 }
 public record DeviceConflict(string Id,string OldId,string OldMac,string NewMac,string? Ip,string OldArchitecture,string NewArchitecture,string Reason);
 public record CoreVersion(string Display,int Build);
@@ -70,7 +70,7 @@ public class Api {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken cancellationToken) {
             if(!string.IsNullOrEmpty(App.ApiToken))request.Headers.Authorization=new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer",App.ApiToken);
             var response=await base.SendAsync(request,cancellationToken);
-            if(response.IsSuccessStatusCode && (!response.Headers.TryGetValues("X-Bootah-Authentication",out var values) || !values.Contains("bearer-v1"))){response.Dispose();throw new HttpRequestException(Strings.Tr("核心未确认令牌鉴权"));}
+            if(response.IsSuccessStatusCode && (!response.Headers.TryGetValues("X-Bootah-Authentication",out var values) || !values.Contains("bearer-v1"))){response.Dispose();throw new HttpRequestException(Strings.Tr("The core did not confirm token authentication"));}
             return response;
         }
     }

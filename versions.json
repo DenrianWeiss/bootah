@@ -1,8 +1,8 @@
 {
-  "core": {"display": "0.1.0", "build": 1},
-  "tui": {"display": "0.1.0", "build": 1},
-  "windows": {"display": "0.1.0", "build": 1},
-  "linux": {"display": "0.1.0", "build": 1},
-  "macos": {"display": "0.1.0", "build": 1},
-  "android": {"display": "0.1.0", "build": 1}
+  "core": {"display": "0.2.3", "build": 5},
+  "tui": {"display": "0.2.3", "build": 5},
+  "windows": {"display": "0.2.3", "build": 5},
+  "linux": {"display": "0.2.3", "build": 5},
+  "macos": {"display": "0.2.3", "build": 5},
+  "android": {"display": "0.2.3", "build": 5}
 }

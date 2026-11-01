@@ -38,13 +38,10 @@ fn manual(
         notes,
     }
 }
-fn note(chinese: bool, english: impl Into<String>, chinese_text: impl Into<String>) -> String {
-    if chinese {
-        chinese_text.into()
-    } else {
-        english.into()
-    }
+fn note(chinese: bool, english: impl Into<String>) -> String {
+    crate::i18n::message(&english.into(), if chinese { "zh-CN" } else { "en" }, "en")
 }
+
 pub fn manual_boot(profile: &Profile, settings: &Settings, chinese: bool) -> ManualBoot {
     match profile.architecture.as_str() {
         "alpha" => alpha(profile, settings, chinese),
@@ -79,18 +76,8 @@ fn pxe_auto(profile: &Profile, chinese: bool) -> ManualBoot {
         if verified { "verified" } else { "documented" },
         "",
         vec![
-            note(
-                chinese,
-                format!(
-                    "Select the NIC's PXE/IPv4 boot entry in the firmware boot menu; Bootah returns `{file}` as the network boot file. No command needs to be typed."
-                ),
-                format!("Select the NIC's PXE/IPv4 entry in the firmware menu; Bootah supplies `{file}` as the network boot file, so no command is needed."),
-            ),
-            note(
-                chinese,
-                "If the firmware opens a shell, return to its boot menu and select the network boot option.",
-                "Return to the firmware boot menu and select the network boot option if a shell opens.",
-            ),
+            note(chinese, "Select the NIC's PXE/IPv4 boot entry in the firmware boot menu; Bootah returns `{file}` as the network boot file. No command needs to be typed.").replace("{file}", &file),
+            note(chinese, "If the firmware opens a shell, return to its boot menu and select the network boot option."),
         ],
     )
 }
@@ -99,56 +86,26 @@ fn uboot_manual(profile: &Profile, settings: &Settings, chinese: bool) -> Manual
         profile.architecture == "riscv64" && profile.kind == "linux" && !profile.initrd.is_empty();
     let mut notes = Vec::new();
     if !riscv {
-        notes.push(note(
-            chinese,
-            "`pxe get` reads the generated PXE/extlinux entry and `pxe boot` runs it.",
-            "`pxe get` reads the generated PXE/extlinux entry and `pxe boot` runs it.",
-        ));
+        notes.push(note(chinese, "`pxe get` reads the generated PXE/extlinux entry and `pxe boot` runs it."));
     }
-    notes.push(note(
-        chinese,
-        "Board-specific DTB, load addresses and the `fdt_addr` variable must match the device; `setenv fdt_addr ${fdtcontroladdr}` is only valid where the firmware provides it.",
-        "The board DTB, load addresses, and `fdt_addr` must match the device; set `fdt_addr` from `${fdtcontroladdr}` only when the firmware provides it.",
-    ));
+    notes.push(note(chinese, "Board-specific DTB, load addresses and the `fdt_addr` variable must match the device; `setenv fdt_addr ${fdtcontroladdr}` is only valid where the firmware provides it."));
     if profile.kind == "fit" {
-        notes.push(note(chinese, "FIT profiles use `tftpboot` and `bootm`; the load address must match the board memory map.", "FIT profiles use `tftpboot` and `bootm`; the load address must match the board memory map."));
+        notes.push(note(chinese, "FIT profiles use `tftpboot` and `bootm`; the load address must match the board memory map."));
     }
     if !profile.arguments.is_empty() {
         if riscv || profile.kind == "fit" {
-            notes.push(note(
-                chinese,
-                "Kernel parameters are assigned to U-Boot `bootargs` before `booti`/`bootm`.",
-                "Kernel parameters are written to U-Boot `bootargs` before running `booti`/`bootm`.",
-            ));
+            notes.push(note(chinese, "Kernel parameters are assigned to U-Boot `bootargs` before `booti`/`bootm`."));
         } else {
-            notes.push(note(
-                chinese,
-                "The generated PXE/extlinux entry passes profile arguments through its `APPEND` line.",
-                "The generated PXE/extlinux entry passes profile arguments through its `APPEND` line.",
-            ));
+            notes.push(note(chinese, "The generated PXE/extlinux entry passes profile arguments through its `APPEND` line."));
         }
     }
     if settings.tftp_port != 69 {
-        notes.push(note(
-            chinese,
-            format!(
-                "The firmware must support `tftpdstp` for the non-standard TFTP port {}.",
-                settings.tftp_port
-            ),
-            format!(
-                "Firmware must support the `tftpdstp` environment variable for non-standard TFTP port {}.",
-                settings.tftp_port
-            ),
-        ));
+        notes.push(note(chinese, "The firmware must support `tftpdstp` for the non-standard TFTP port {port}.").replace("{port}", &settings.tftp_port.to_string()));
     }
     let verified = profile.architecture.ends_with("-uboot")
         || profile.boot_files.keys().any(|key| key.ends_with("-uboot"));
     if riscv {
-        notes.push(note(
-            chinese,
-            "Debian RISC-V netboot `linux` is a PE/EFI image. Use `booti`; raw initrds require the downloaded size (`${filesize}`). `bootefi` has no initrd argument. Load addresses must match the board.",
-            "Debian RISC-V netboot `linux` is a PE/EFI image. Use `booti`; raw initrds need the downloaded size (`${filesize}`). `bootefi` has no initrd argument. Load addresses must match the board.",
-        ));
+        notes.push(note(chinese, "Debian RISC-V netboot `linux` is a PE/EFI image. Use `booti`; raw initrds require the downloaded size (`${filesize}`). `bootefi` has no initrd argument. Load addresses must match the board."));
     }
     let commands = if riscv {
         let mut lines = vec![
@@ -160,7 +117,7 @@ fn uboot_manual(profile: &Profile, settings: &Settings, chinese: bool) -> Manual
             Ok(Some(command)) => lines.push(command),
             Ok(None) => {}
             Err(error) => {
-                notes.push(note(chinese, error.clone(), error));
+                notes.push(note(chinese, error));
                 return manual("uboot", "U-Boot", "unavailable", "", notes);
             }
         }
@@ -175,7 +132,7 @@ fn uboot_manual(profile: &Profile, settings: &Settings, chinese: bool) -> Manual
         match uboot(profile, settings) {
             Ok(commands) => commands,
             Err(error) => {
-                notes.push(note(chinese, error.clone(), error));
+                notes.push(note(chinese, error));
                 return manual("uboot", "U-Boot", "unavailable", "", notes);
             }
         }
@@ -198,9 +155,9 @@ fn alpha(profile: &Profile, settings: &Settings, chinese: bool) -> ManualBoot {
             "srm", "Alpha SRM", "documented",
             "show device\nboot -protocols bootp <net-device> -file bootah-srm.bin",
             vec![
-                note(chinese, "Replace <net-device> with the firmware-supported Ethernet device from show device (for example ewa0, ewb0 or era0). Check the machine manual for console-specific syntax. The small loader downloads the Debian kernel and initrd separately.", "把 <net-device> 替换为 show device 列出的固件支持的以太网设备（如 ewa0、ewb0 或 era0），并按该机型手册核对控制台语法。小型引导器分别下载 Debian 内核和 initrd。"),
-                note(chinese, "SRM first needs static firmware network settings or BOOTP to load the small loader. The loader then supports ordinary DHCP plus Bootah ProxyDHCP.", "SRM 首先需要静态固件网络设置或 BOOTP 来加载小引导器；之后引导器支持普通 DHCP 加 Bootah ProxyDHCP。"),
-                note(chinese, "Each target platform requires separate validation; ES40 results do not certify other Alpha systems.", "目标平台必须单独验证；ES40 的验收结果不代表其他 Alpha 平台已通过。"),
+                note(chinese, "Replace <net-device> with the firmware-supported Ethernet device from show device (for example ewa0, ewb0 or era0). Check the machine manual for console-specific syntax. The small loader downloads the Debian kernel and initrd separately."),
+                note(chinese, "SRM first needs static firmware network settings or BOOTP to load the small loader. The loader then supports ordinary DHCP plus Bootah ProxyDHCP."),
+                note(chinese, "Each target platform requires separate validation; ES40 results do not certify other Alpha systems."),
             ],
         );
     }
@@ -221,11 +178,7 @@ fn alpha(profile: &Profile, settings: &Settings, chinese: bool) -> ManualBoot {
     } else {
         format!(" -flags \"{}\"", arguments.replace(['"', '\n', '\r'], ""))
     };
-    let mut notes = vec![note(
-        chinese,
-        "At the SRM `>>>` prompt; run `show device` if the Ethernet device is not `ewa0`.",
-        "Run these commands at the SRM `>>>` prompt. If the NIC is not `ewa0`, use `show device` to find its name.",
-    )];
+    let mut notes = vec![note(chinese, "At the SRM `>>>` prompt; run `show device` if the Ethernet device is not `ewa0`.")];
     if openvms {
         let file = profile
             .boot_files
@@ -238,16 +191,8 @@ fn alpha(profile: &Profile, settings: &Settings, chinese: bool) -> ManualBoot {
             .filter(|(_, extension)| extension.eq_ignore_ascii_case("sys"))
             .map(|(name, _)| name)
             .unwrap_or(file);
-        notes.push(note(
-            chinese,
-            "MOP loads the first-stage bootstrap and opens the OpenVMS Network Initial System Load menu.",
-            "MOP loads the first-stage bootstrap and opens the OpenVMS Network Initial System Load menu.",
-        ));
-        notes.push(note(
-            chinese,
-            "A complete OpenVMS network installation requires an InfoServer LAD/LAST media service.",
-            "A complete OpenVMS network installation requires InfoServer LAD/LAST media services.",
-        ));
+        notes.push(note(chinese, "MOP loads the first-stage bootstrap and opens the OpenVMS Network Initial System Load menu."));
+        notes.push(note(chinese, "A complete OpenVMS network installation requires an InfoServer LAD/LAST media service."));
         manual(
             "srm",
             "Alpha SRM",
@@ -257,35 +202,15 @@ fn alpha(profile: &Profile, settings: &Settings, chinese: bool) -> ManualBoot {
         )
     } else {
         if mop {
-            notes.push(note(
-                chinese,
-                "MOP loads the second-stage bootstrap before entering the Linux kernel.",
-                "MOP loads the second-stage bootstrap, which then starts the Linux kernel.",
-            ));
+            notes.push(note(chinese, "MOP loads the second-stage bootstrap before entering the Linux kernel."));
         } else {
-            notes.push(note(
-                chinese,
-                "SRM obtains the boot file name from BOOTP/DHCP; Bootah serves the file over TFTP.",
-                "SRM obtains the boot filename through BOOTP/DHCP, and Bootah serves the file over TFTP.",
-            ));
+            notes.push(note(chinese, "SRM obtains the boot file name from BOOTP/DHCP; Bootah serves the file over TFTP."));
         }
         if !flags.is_empty() {
-            notes.push(note(
-                chinese,
-                "The profile kernel arguments are passed as SRM `-flags`; remove them if the console rejects them.",
-                "SRM passes this system's kernel parameters through `-flags`; remove the parameter if the console rejects it.",
-            ));
+            notes.push(note(chinese, "The profile kernel arguments are passed as SRM `-flags`; remove them if the console rejects them."));
         }
-        notes.push(note(
-            chinese,
-            "Alpha Linux uses aboot to load the Linux kernel.",
-            "Alpha Linux uses aboot to load the Linux kernel.",
-        ));
-        notes.push(note(
-            chinese,
-            "Bootah does not provide the NFS root used by NetBSD/OpenBSD diskless boot.",
-            "Bootah does not provide the NFS root filesystem required for NetBSD/OpenBSD diskless boot.",
-        ));
+        notes.push(note(chinese, "Alpha Linux uses aboot to load the Linux kernel."));
+        notes.push(note(chinese, "Bootah does not provide the NFS root used by NetBSD/OpenBSD diskless boot."));
         manual(
             "srm",
             "Alpha SRM",
@@ -304,53 +229,29 @@ fn sgi(chinese: bool) -> ManualBoot {
         "SGI ARC/PROM",
         "documented",
         "unsetenv netaddr\nbootp():",
-        vec![note(
-            chinese,
-            "At the SGI PROM `>>` prompt. If `bootp():` is rejected, use `boot -f bootp()/netboot-boot.img`.",
-            "Run this at the SGI PROM `>>` prompt. If `bootp():` is rejected, use `boot -f bootp()/netboot-boot.img`.",
-        )],
+        vec![note(chinese, "At the SGI PROM `>>` prompt. If `bootp():` is rejected, use `boot -f bootp()/netboot-boot.img`.")],
     )
 }
 fn openbios(profile: &Profile, settings: &Settings, chinese: bool) -> ManualBoot {
     if crate::openbsd::network_root(profile) && !crate::sparc_obp::enabled(profile) {
-        return manual("openboot", "OpenBSD SPARC64 OpenBoot", "unverified", "boot net bsd.rd", vec![note(chinese,
-            "原厂 OpenBoot 通过 RARP/TFTP 加载原版 ofwboot.net，再经 bootparams/NFS 加载 bsd.rd。请开启以太网协议、绑定静态 IP 和镜像；真机启动待验收。",
-            "OpenBoot loads original ofwboot.net through RARP/TFTP, then bsd.rd through bootparams/NFS. Enable Ethernet protocols and assign a static IP and image. Hardware boot validation is pending.")]);
+        return manual("openboot", "OpenBSD SPARC64 OpenBoot", "unverified", "boot net bsd.rd", vec![note(chinese, "OpenBoot loads original ofwboot.net through RARP/TFTP, then bsd.rd through bootparams/NFS. Enable Ethernet protocols and assign a static IP and image. Hardware boot validation is pending.")]);
     }
     if crate::sparc_obp::enabled(profile) {
-        return manual("openboot", "SPARC64 OpenBoot", "unverified", "boot net", vec![note(chinese,
-            "原厂 OpenBoot 通过 RARP/TFTP 加载 Bootah 二阶段，再以 DHCP/ProxyDHCP 获取 GRUB 或原版 BSD 引导器及内核参数。请分配镜像并开启以太网协议与 DHCP 或 ProxyDHCP；已设置 IP 优先，否则自动申请 RARP 地址。真机验收待完成。",
-            "OpenBoot loads Bootah through RARP/TFTP; DHCP/ProxyDHCP then selects GRUB or the original BSD loader and kernel arguments. Assign an image and enable Ethernet protocols and DHCP or ProxyDHCP. A configured IP takes priority; otherwise Bootah obtains a RARP address automatically. Hardware validation is pending.")]);
+        return manual("openboot", "SPARC64 OpenBoot", "unverified", "boot net", vec![note(chinese, "OpenBoot loads Bootah through RARP/TFTP; DHCP/ProxyDHCP then selects GRUB or the original BSD loader and kernel arguments. Assign an image and enable Ethernet protocols and DHCP or ProxyDHCP. A configured IP takes priority; otherwise Bootah obtains a RARP address automatically. Hardware validation is pending.")]);
     }
     let (commands, mut notes) = if settings.dhcp_enabled {
         (
             "boot net:dhcp",
-            vec![note(
-                chinese,
-                "OpenBoot uses RARP with `boot net`; `boot net:dhcp` asks the firmware to configure the client with DHCP.",
-                "OpenBoot `boot net` uses RARP; `boot net:dhcp` requires the firmware to configure the client through DHCP.",
-            )],
+            vec![note(chinese, "OpenBoot uses RARP with `boot net`; `boot net:dhcp` asks the firmware to configure the client with DHCP.")],
         )
     } else {
         (
             "boot net",
-            vec![note(
-                chinese,
-                "OpenBoot uses RARP by default; enable DHCP in Bootah and use `boot net:dhcp` to use DHCP instead.",
-                "OpenBoot uses RARP by default; use `boot net:dhcp` after enabling DHCP in Bootah.",
-            )],
+            vec![note(chinese, "OpenBoot uses RARP by default; enable DHCP in Bootah and use `boot net:dhcp` to use DHCP instead.")],
         )
     };
-    notes.push(note(
-        chinese,
-        "Assign this profile before booting. BOOTP/DHCP supplies a filename; RARP supplies an IP address, from which OpenBoot derives its TFTP filename.",
-        "Assign this system to the device before booting. BOOTP/DHCP provides the filename; RARP provides only the IP, from which OpenBoot derives the TFTP filename.",
-    ));
-    notes.push(note(
-        chinese,
-        "These commands require OpenBoot network boot support. Solaris 11 AI/IPS and WAN boot services are not supported.",
-        "These commands require OpenBoot network boot support. Solaris 11 AI/IPS and WAN boot services are not supported.",
-    ));
+    notes.push(note(chinese, "Assign this profile before booting. BOOTP/DHCP supplies a filename; RARP supplies an IP address, from which OpenBoot derives its TFTP filename."));
+    notes.push(note(chinese, "These commands require OpenBoot network boot support. Solaris 11 AI/IPS and WAN boot services are not supported."));
     let commands = if profile.kind == "solaris" {
         let arguments = render_arguments(profile, settings);
         format!(
@@ -365,50 +266,22 @@ fn openbios(profile: &Profile, settings: &Settings, chinese: bool) -> ManualBoot
 }
 fn ia64(profile: &Profile, chinese: bool) -> ManualBoot {
     let mut notes = vec![
-        note(
-            chinese,
-            "IA64 ELILO netboot is started from the EFI firmware network boot option: firmware PXE/DHCP loads `elilo.efi`, then ELILO reads `elilo-ia64.conf`, the kernel and initrd from the same TFTP directory.",
-            "IA64 ELILO netboot starts from the EFI firmware network boot option: firmware loads `elilo.efi` through PXE/DHCP, then ELILO reads `elilo-ia64.conf`, the kernel, and initrd from the same TFTP directory.",
-        ),
-        note(
-            chinese,
-            "An EFI shell can configure the network with `ifconfig -s eth0 dhcp`, but the standard EFI shell has no command that starts a PXE/ELILO network boot.",
-            "The EFI shell can configure networking with `ifconfig -s eth0 dhcp`, but the standard EFI shell has no command to start a PXE/ELILO network boot.",
-        ),
+        note(chinese, "IA64 ELILO netboot is started from the EFI firmware network boot option: firmware PXE/DHCP loads `elilo.efi`, then ELILO reads `elilo-ia64.conf`, the kernel and initrd from the same TFTP directory."),
+        note(chinese, "An EFI shell can configure the network with `ifconfig -s eth0 dhcp`, but the standard EFI shell has no command that starts a PXE/ELILO network boot."),
     ];
     if profile.boot_files.contains_key("ia64") {
-        notes.push(note(
-            chinese,
-            "This profile already prepares `elilo.efi` and `elilo-ia64.conf` for TFTP.",
-            "This profile prepares `elilo.efi` and `elilo-ia64.conf` for TFTP.",
-        ));
+        notes.push(note(chinese, "This profile already prepares `elilo.efi` and `elilo-ia64.conf` for TFTP."));
     }
     manual("efi", "IA64 EFI/ELILO", "unavailable", "", notes)
 }
 fn palo(profile: &Profile, chinese: bool) -> ManualBoot {
     let mut notes = vec![
-        note(
-            chinese,
-            "At the PDC `BOOT_ADMIN>` prompt, `boot lan` asks the firmware to use BOOTP/TFTP; the boot file name is supplied by the DHCP/BOOTP reply.",
-            "At the PDC `BOOT_ADMIN>` prompt, run `boot lan` to use BOOTP/TFTP; the DHCP/BOOTP reply supplies the boot filename.",
-        ),
-        note(
-            chinese,
-            "Newer Series 700 and B/C/J class systems use BOOTP/TFTP; older RMP-only models use RMP instead.",
-            "Newer Series 700 and B/C/J systems use BOOTP/TFTP; older RMP-only models use RMP.",
-        ),
-        note(
-            chinese,
-            "Bootah generates a PALO LIF boot file (`netboot-hppa.lif` or `netboot-hppa64.lif`).",
-            "Bootah generates a PALO LIF boot file (`netboot-hppa.lif` or `netboot-hppa64.lif`).",
-        ),
+        note(chinese, "At the PDC `BOOT_ADMIN>` prompt, `boot lan` asks the firmware to use BOOTP/TFTP; the boot file name is supplied by the DHCP/BOOTP reply."),
+        note(chinese, "Newer Series 700 and B/C/J class systems use BOOTP/TFTP; older RMP-only models use RMP instead."),
+        note(chinese, "Bootah generates a PALO LIF boot file (`netboot-hppa.lif` or `netboot-hppa64.lif`)."),
     ];
     if !profile.boot_files.is_empty() {
-        notes.push(note(
-            chinese,
-            "Make sure the firmware boot file matches the `default` boot file mapping of this profile.",
-            "Confirm that the firmware boot filename matches this profile's `default` boot-file mapping.",
-        ));
+        notes.push(note(chinese, "Make sure the firmware boot file matches the `default` boot file mapping of this profile."));
     }
     manual("palo", "PA-RISC PALO", "documented", "boot lan", notes)
 }

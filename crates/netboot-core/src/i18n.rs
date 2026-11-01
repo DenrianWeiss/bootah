@@ -36,6 +36,17 @@ pub fn message(text: &str, locale: &str, fallback: &str) -> String {
 mod tests {
     use super::*;
     #[test]
+    fn english_catalog_keys_have_both_locales_and_preserve_placeholders() {
+        let catalog: Value = serde_json::from_str(include_str!("../../../i18n/terms.json")).unwrap();
+        for (key, values) in catalog["terms"].as_object().unwrap() {
+            for locale in ["en", "zh-CN"] {
+                assert_eq!(message(key, locale, "en"), values[locale].as_str().unwrap(), "{locale}: {key}");
+            }
+        }
+        let key = "The firmware must support `tftpdstp` for the non-standard TFTP port {port}.";
+        assert_eq!(message(key, "zh-CN", "en").replace("{port}", "1069"), "使用非标准 TFTP 端口 1069 时，固件必须支持 `tftpdstp`。");
+    }
+    #[test]
     fn current_and_saved_diagnostics_use_one_language_and_preserve_parameters() {
         for input in [
             "EFI certificate detected",

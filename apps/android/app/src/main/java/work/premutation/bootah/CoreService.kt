@@ -10,6 +10,7 @@ import android.widget.Toast
 import java.io.File
 
 class CoreService : Service() {
+    private fun tr(key:String)=Strings.tr(key,resources.configuration.locales.get(0).toLanguageTag())
     private var core:Process?=null
     private var rootMode=false
     private var wake:PowerManager.WakeLock?=null
@@ -19,16 +20,16 @@ class CoreService : Service() {
         val manager=getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel("netboot","Bootah",NotificationManager.IMPORTANCE_LOW))
         val stop=PendingIntent.getService(this,0,Intent(this,CoreService::class.java).setAction("stop"),PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        startForeground(1,Notification.Builder(this,"netboot").setContentTitle("Bootah").setSmallIcon(R.drawable.ic_bootah).addAction(Notification.Action.Builder(Icon.createWithResource(this,android.R.drawable.ic_media_pause),"停止",stop).build()).build())
+        startForeground(1,Notification.Builder(this,"netboot").setContentTitle("Bootah").setSmallIcon(R.drawable.ic_bootah).addAction(Notification.Action.Builder(Icon.createWithResource(this,android.R.drawable.ic_media_pause),tr("Stop"),stop).build()).build())
         wake=getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"netboot:server").apply{setReferenceCounted(false);acquire()}
         multicast=(applicationContext.getSystemService(WIFI_SERVICE)as WifiManager).createMulticastLock("netboot").apply{setReferenceCounted(false);acquire()}
     }
     override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int {
         if(intent?.action=="stop"){stopSelf();return START_NOT_STICKY}
         val root=intent?.getBooleanExtra("root",false)==true
-        if(core?.isAlive==true){if(root!=rootMode)Toast.makeText(this,"请先结束本机服务",Toast.LENGTH_SHORT).show();return START_NOT_STICKY}
+        if(core?.isAlive==true){if(root!=rootMode)Toast.makeText(this,tr("Stop the local service first"),Toast.LENGTH_SHORT).show();return START_NOT_STICKY}
         val binary=File(applicationInfo.nativeLibraryDir,"libnetboot_core.so")
-        if(!binary.exists()){Toast.makeText(this,"缺少服务程序",Toast.LENGTH_LONG).show();stopSelf();return START_NOT_STICKY}
+        if(!binary.exists()){Toast.makeText(this,tr("The service executable is missing"),Toast.LENGTH_LONG).show();stopSelf();return START_NOT_STICKY}
         val config=File(filesDir,"state.json")
         if(!config.exists())config.writeText("""{"settings":{"dhcp_auto":true,"dhcp_enabled":false,"tftp_port":${if(root)69 else 1069},"http_port":8080}}""")
         val bootAssets=File(filesDir,"boot-assets").apply{mkdirs()}

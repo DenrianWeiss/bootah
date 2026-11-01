@@ -25,7 +25,7 @@ class MainActivity : Activity() {
     private val automationCapabilities=mutableMapOf<String,List<String>>()
     private val capabilitySignatures=mutableMapOf<String,String>()
     private val capabilityRequests=mutableSetOf<String>()
-    private var page = "设备"
+    private var page = "Devices"
     private var selectedDeviceId:String?=null
     private var selectedProfileId:String?=null
     private var deletingSelection=false
@@ -42,8 +42,7 @@ class MainActivity : Activity() {
     private val dark get()=resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK == android.content.res.Configuration.UI_MODE_NIGHT_YES
     private val localeTag get()=resources.configuration.locales.get(0).toLanguageTag()
     private val chinese get()=localeTag.startsWith("zh")
-    private fun t(zh:String,en:String)=Strings.tr(zh,localeTag).let{if(it==zh&&!chinese)en else it}
-    private fun tr(zh:String)=Strings.tr(zh,localeTag)
+    private fun tr(key:String)=Strings.tr(key,localeTag)
     private fun message(text:String)=Strings.message(text,localeTag)
     private val ink get()=android.graphics.Color.parseColor(if(dark)"#F1F3F7" else "#18212E")
     private val muted get()=android.graphics.Color.parseColor(if(dark)"#A7B1BF" else "#657181")
@@ -88,28 +87,28 @@ class MainActivity : Activity() {
             val backgroundValue=android.util.TypedValue()
             theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless,backgroundValue,true)
             setBackgroundResource(backgroundValue.resourceId)
-            contentDescription=t("设置","Settings");tooltipText=contentDescription
+            contentDescription=tr("Settings");tooltipText=contentDescription
             scaleType=ImageView.ScaleType.CENTER_INSIDE;setPadding(dp(12),dp(12),dp(12),dp(12))
             setOnClickListener{settings()}
         }
         header.addView(settingsButton,LinearLayout.LayoutParams(dp(48),dp(48)));layout.addView(header)
         val bar=LinearLayout(this).apply{gravity=android.view.Gravity.CENTER_VERTICAL;setPadding(padding,dp(12),padding,dp(12))}
         heading=TextView(this).apply{textSize=30f;setTextColor(ink);setTypeface(null,Typeface.BOLD)};bar.addView(heading,LinearLayout.LayoutParams(0,-2,1f))
-        toggle=button(t("启动","Start"),primary=true) {if(snapshot.length()==0){startAfterDetection=true;if(localCore())startForegroundService(Intent(this,CoreService::class.java))}else if(snapshot.optBoolean("running")) request("/api/service/stop","POST",JSONObject()){refresh()} else detectNetwork { request("/api/service/start","POST",JSONObject()){refresh()} }}
-        deleteSelectionButton=button(tr("删除")){deleteSelection()}
+        toggle=button(tr("Start"),primary=true) {if(snapshot.length()==0){startAfterDetection=true;if(localCore())startForegroundService(Intent(this,CoreService::class.java))}else if(snapshot.optBoolean("running")) request("/api/service/stop","POST",JSONObject()){refresh()} else detectNetwork { request("/api/service/start","POST",JSONObject()){refresh()} }}
+        deleteSelectionButton=button(tr("Delete")){deleteSelection()}
         bar.addView(deleteSelectionButton);bar.addView(toggle);layout.addView(bar)
         logToolbar=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(padding,0,padding,0)};layout.addView(logToolbar)
         content=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(padding,dp(8),padding,dp(24))}
         contentScroll=ScrollView(this).apply {isFillViewport=true;addView(content)}
         layout.addView(contentScroll,LinearLayout.LayoutParams(-1,0,1f))
         val tabs=LinearLayout(this).apply{setPadding(dp(12),dp(8),dp(12),dp(8));setBackgroundColor(surface)}
-        listOf("设备","镜像库","活动").forEach {name->val item=button(tabName(name)){page=name;render()};navigation[name]=item;tabs.addView(item,LinearLayout.LayoutParams(0,dp(64),1f))}
+        listOf("Devices","Image library","Activity").forEach {name->val item=button(tabName(name)){page=name;render()};navigation[name]=item;tabs.addView(item,LinearLayout.LayoutParams(0,dp(64),1f))}
         layout.addView(state,LinearLayout.LayoutParams(-1,dp(24)))
         layout.addView(tabs)
         setContentView(layout);render();refresh()
     }
     private fun button(label:String, primary:Boolean=false, action:()->Unit)=Button(this,null,0,if(primary)android.R.style.Widget_Material_Button_Colored else android.R.style.Widget_Material_Button_Borderless).apply {text=label;isAllCaps=false;setOnClickListener{action()}}
-    private fun tabName(name:String)=when(name){"设备"->t("设备","Devices");"镜像库"->t("镜像","Images");else->t("活动","Activity")}
+    private fun tabName(name:String)=when(name){"Devices"->tr("Devices");"Image library"->tr("Images");else->tr("Activity")}
     private fun actions(vararg items:Pair<String,()->Unit>) {
         val bar=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
         items.forEach { (label,action)->bar.addView(button(label,action=action),LinearLayout.LayoutParams(-2,-2).apply{marginEnd=dp(8)}) }
@@ -140,10 +139,10 @@ class MainActivity : Activity() {
                 if(body!=null){connection.doOutput=true;connection.setRequestProperty("Content-Type","application/json");connection.outputStream.use{it.write(body.toString().toByteArray())}}
                 val code=connection.responseCode
                 val ok=code in 200..299 && connection.getHeaderField("X-Bootah-Authentication")=="bearer-v1"
-                val text=if(code in 200..299&&!ok)tr("核心未确认令牌鉴权") else (if(ok)connection.inputStream else connection.errorStream)?.bufferedReader()?.use{it.readText()} ?: ""
+                val text=if(code in 200..299&&!ok)tr("The core did not confirm token authentication") else (if(ok)connection.inputStream else connection.errorStream)?.bufferedReader()?.use{it.readText()} ?: ""
                 connection.disconnect()
                 runOnUiThread{if(ok)done(text)else{failed(code);failedBody?.invoke(code,text);if(!quiet)Toast.makeText(this,text.lines().joinToString("\n"){message(it)},Toast.LENGTH_LONG).show()}}
-            }catch(e:Exception){runOnUiThread{failed(null);state.text=tr("未连接");if(!quiet)Toast.makeText(this,message(e.message.orEmpty()),Toast.LENGTH_LONG).show()}}
+            }catch(e:Exception){runOnUiThread{failed(null);state.text=tr("Disconnected");if(!quiet)Toast.makeText(this,message(e.message.orEmpty()),Toast.LENGTH_LONG).show()}}
             finally{runOnUiThread{finished()}}
         }
     }
@@ -183,25 +182,25 @@ class MainActivity : Activity() {
         request("/api/network/permissions",quiet=true,failed={showPermissionIssues(listOf(tr("Network permission checks could not complete. Check the core connection and retry from network settings.")))}){text->
             val issues=JSONObject(text).optJSONArray("issues")?:JSONArray()
             val messages=(0 until issues.length()).map{issues.getString(it).lines().joinToString("\n"){line->tr(line)}}.toMutableList()
-            if(localCore()&&android.os.Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)messages.add(tr("通知权限未开启。请在应用设置中允许 Bootah 发送通知，以显示后台服务状态。"))
-            if(messages.isNotEmpty())showPermissionIssues(messages)else if(force)AlertDialog.Builder(this).setTitle(tr("网络权限")).setMessage(tr("无需额外授权")).setPositiveButton(tr("好"),null).show()
+            if(localCore()&&android.os.Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)messages.add(tr("Notifications are disabled. Allow Bootah notifications in app settings to see background service status."))
+            if(messages.isNotEmpty())showPermissionIssues(messages)else if(force)AlertDialog.Builder(this).setTitle(tr("Network permissions")).setMessage(tr("No additional authorization required")).setPositiveButton(tr("OK"),null).show()
         }
     }
     private fun showPermissionIssues(messages:List<String>){
         if(isFinishing||isDestroyed)return
-        val dialog=AlertDialog.Builder(this).setTitle(tr("需要处理的权限")).setMessage(messages.joinToString("\n\n")).setPositiveButton(tr("设置")){_,_->settings()}.setNegativeButton(tr("稍后"),null)
-        if(localCore()&&android.os.Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)dialog.setNeutralButton(tr("前往应用设置")){_,_->startActivity(Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE,packageName))}
+        val dialog=AlertDialog.Builder(this).setTitle(tr("Permissions requiring attention")).setMessage(messages.joinToString("\n\n")).setPositiveButton(tr("Settings")){_,_->settings()}.setNegativeButton(tr("Later"),null)
+        if(localCore()&&android.os.Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)dialog.setNeutralButton(tr("Open app settings")){_,_->startActivity(Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE,packageName))}
         dialog.show()
     }
-    private fun refresh(){if(refreshing)return;refreshing=true;request("/api/state",quiet=true,finished={refreshing=false},failed={code->if(code==401)state.text=tr("管理令牌无效或缺失") else if(code!=null && code in 200..299)state.text=tr("核心未确认令牌鉴权") else if(localCore()&&!coreRequested){coreRequested=true;startForegroundService(Intent(this,CoreService::class.java))}}){
+    private fun refresh(){if(refreshing)return;refreshing=true;request("/api/state",quiet=true,finished={refreshing=false},failed={code->if(code==401)state.text=tr("Management token missing or invalid") else if(code!=null && code in 200..299)state.text=tr("The core did not confirm token authentication") else if(localCore()&&!coreRequested){coreRequested=true;startForegroundService(Intent(this,CoreService::class.java))}}){
         snapshot=JSONObject(it)
         loadAutomationCapabilities()
         val result=snapshot.optJSONObject("network")
         val detection=result?.optString("status").orEmpty()
-        val fullStatus=tr(if(snapshot.optBoolean("running"))"运行中" else "已停止")+"  "+tr(detection)
+        val fullStatus=tr(if(snapshot.optBoolean("running"))"Running" else "Stopped")+"  "+tr(detection)
         state.contentDescription=fullStatus
-        state.text=tr(if(snapshot.optBoolean("running"))"运行中" else "已停止")+"  "+tr(when(detection){"lease_found"->"DHCP：系统记录";"response_found"->"DHCP：已响应";else->detection})
-        toggle.text=tr(if(snapshot.optBoolean("running"))"停止" else "启动");render();checkDeviceConflict()
+        state.text=tr(if(snapshot.optBoolean("running"))"Running" else "Stopped")+"  "+tr(when(detection){"lease_found"->"DHCP: system record";"response_found"->"DHCP: live response";else->detection})
+        toggle.text=tr(if(snapshot.optBoolean("running"))"Stop" else "Start");render();checkDeviceConflict()
         if(!snapshot.optBoolean("running")&&!detecting&&networkEvidence().toString()!=networkSignature)detectNetwork()
         else if(!detecting&&!permissionsChecked)checkPermissions()
     }}
@@ -210,12 +209,12 @@ class MainActivity : Activity() {
         if(conflict==null){pendingConflictId=null;return}
         val id=conflict.optString("id");if(id==pendingConflictId)return;pendingConflictId=id
         val details=if(conflict.optString("reason")=="ip-mac")"IP ${conflict.optString("ip")}: ${conflict.optString("old_mac")} → ${conflict.optString("new_mac")}" else "${conflict.optString("new_mac")}: ${conflict.optString("old_architecture")} → ${conflict.optString("new_architecture")}"
-        val message=details+"\n"+tr("旧设备有手动配置。清理后，新设备将在下次网络启动时使用默认镜像。")
+        val message=details+"\n"+tr("The old device has manual settings. After removal, the new device will use its default image on the next network boot.")
         val resolve:(Boolean)->Unit={accept->request("/api/device-conflicts/$id","POST",JSONObject().put("accept",accept)){refresh()}}
-        AlertDialog.Builder(this).setTitle(tr("清理旧设备记录？")).setMessage(message).setPositiveButton(tr("清理")){_,_->resolve(true)}.setNegativeButton(tr("保留")){_,_->resolve(false)}.setCancelable(false).show()
+        AlertDialog.Builder(this).setTitle(tr("Remove the old device record?")).setMessage(message).setPositiveButton(tr("Remove")){_,_->resolve(true)}.setNegativeButton(tr("Keep")){_,_->resolve(false)}.setCancelable(false).show()
     }
     private fun deleteSelection(){
-        val devices=page=="设备"
+        val devices=page=="Devices"
         val id=(if(devices)selectedDeviceId else selectedProfileId)?:return
         deletingSelection=true;deleteSelectionButton.isEnabled=false
         request("/api/${if(devices)"devices" else "profiles"}/$id","DELETE",finished={deletingSelection=false;render()}){
@@ -227,25 +226,25 @@ class MainActivity : Activity() {
         fun exists(key:String,id:String?):Boolean {val entries=snapshot.optJSONArray(key)?:return false;return (0 until entries.length()).any{entries.getJSONObject(it).optString("id")==id}}
         if(!exists("devices",selectedDeviceId))selectedDeviceId=null
         if(!exists("profiles",selectedProfileId))selectedProfileId=null
-        deleteSelectionButton.visibility=if(page=="活动")View.GONE else View.VISIBLE
-        deleteSelectionButton.isEnabled=!deletingSelection && (if(page=="设备")selectedDeviceId!=null else selectedProfileId!=null)
-        logToolbar.removeAllViews();logToolbar.visibility=if(page=="活动")View.VISIBLE else View.GONE
-        content.removeAllViews();heading.text=when(page){"设备"->t("设备","Devices");"镜像库"->t("镜像库","Image library");else->t("活动","Activity")}
+        deleteSelectionButton.visibility=if(page=="Activity")View.GONE else View.VISIBLE
+        deleteSelectionButton.isEnabled=!deletingSelection && (if(page=="Devices")selectedDeviceId!=null else selectedProfileId!=null)
+        logToolbar.removeAllViews();logToolbar.visibility=if(page=="Activity")View.VISIBLE else View.GONE
+        content.removeAllViews();heading.text=when(page){"Devices"->tr("Devices");"Image library"->tr("Image library");else->tr("Activity")}
         for((name,item)in navigation){item.setTextColor(if(name==page)android.graphics.Color.parseColor(if(dark)"#AFCFFF" else "#245EA7") else muted);item.isSelected=name==page}
         when(page){
-            "设备"->{actions(t("添加设备","Add device") to {device(JSONObject())});val devices=snapshot.optJSONArray("devices");if(devices==null||devices.length()==0)row(t("暂无设备","No devices yet"),"",""){device(JSONObject())};devices?.each {d->val profiles=snapshot.optJSONArray("profiles");var assigned=t("未分配镜像","No image assigned");val defaultId=snapshot.optJSONObject("default_profiles")?.optString(d.optString("architecture"));profiles?.each{if(it.optString("id")==d.optString("profile_id"))assigned=it.optString("name") else if(d.isNull("profile_id")&&it.optString("id")==defaultId)assigned=tr("按架构自动分配")+"  "+it.optString("name")};row(d.optString("name").ifEmpty{d.optString("mac").ifEmpty{d.optString("ip")}},listOf(d.optString("ip"),d.optString("architecture"),d.optString("model")).filter{it.isNotBlank()&&it!="null"}.joinToString("  "),assigned,selected=d.optString("id")==selectedDeviceId,longAction={deviceMenu(d)}){selectedDeviceId=d.optString("id");render()}}}
-            "镜像库"->{architectureDefaults();actions(tr("导入 ISO") to {pickIso()},tr("高级手动配置") to {profile(JSONObject())});isoTrustCheck=CheckBox(this).apply{text=t("信任所选本地 ISO 安装源","Trust selected local ISO source");isChecked=trustLocalIso;setTextColor(ink);setOnCheckedChangeListener{_,checked->trustLocalIso=checked}};content.addView(isoTrustCheck);snapshot.optJSONArray("profiles")?.each {p->row(p.optString("system_name").ifBlank{p.optString("name")},"${p.optString("name")}  ${p.optString("architecture")}  ${p.optString("kind")}",(if(p.optString("status")=="needs-attention")tr("待配置") else p.optString("media")),logoId(p),selected=p.optString("id")==selectedProfileId,longAction={profileMenu(p)}){selectedProfileId=p.optString("id");render()}}}
-            else->{val logBar=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(0,dp(4),0,dp(12))};val filterRow=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL};filterRow.addView(button(t("日志级别","Log level"),action={chooseLogLevel()}),LinearLayout.LayoutParams(-2,-2).apply{marginEnd=dp(16)});filterRow.addView(CheckBox(this).apply{text=t("包含原始隐私信息","Include private data");isChecked=exportRaw;setTextColor(ink);setOnCheckedChangeListener{_,checked->exportRaw=checked}},LinearLayout.LayoutParams(0,-2,1f));logBar.addView(filterRow);logBar.addView(button(t("导出诊断日志","Export diagnostics"),action={saveDiagnostics()}),LinearLayout.LayoutParams(-2,-2).apply{topMargin=dp(12);gravity=Gravity.END});val logActions=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};logActions.addView(button(tr("清除日志")){request("/api/events","DELETE"){refresh()}},LinearLayout.LayoutParams(0,-2,1f));logActions.addView(button(tr("回到日志顶部")){contentScroll.smoothScrollTo(0,0)},LinearLayout.LayoutParams(0,-2,1f));logBar.addView(logActions);logToolbar.addView(logBar);val events=snapshot.optJSONArray("events");if(events==null||events.length()==0)row(tr("暂无活动"),"",""){};events?.let{for(i in it.length()-1 downTo 0){val e=it.getJSONObject(i);row(e.optString("protocol"),e.optString("message"),e.optString("device")) {}}}}
+            "Devices"->{actions(tr("Add device") to {device(JSONObject())});val devices=snapshot.optJSONArray("devices");if(devices==null||devices.length()==0)row(tr("No devices yet"),"",""){device(JSONObject())};devices?.each {d->val profiles=snapshot.optJSONArray("profiles");var assigned=tr("No image assigned");val defaultId=snapshot.optJSONObject("default_profiles")?.optString(d.optString("architecture"));profiles?.each{if(it.optString("id")==d.optString("profile_id"))assigned=it.optString("name") else if(d.isNull("profile_id")&&it.optString("id")==defaultId)assigned=tr("Assign by architecture")+"  "+it.optString("name")};row(d.optString("name").ifEmpty{d.optString("mac").ifEmpty{d.optString("ip")}},listOf(d.optString("ip"),d.optString("architecture"),d.optString("model")).filter{it.isNotBlank()&&it!="null"}.joinToString("  "),assigned,selected=d.optString("id")==selectedDeviceId,longAction={deviceMenu(d)}){selectedDeviceId=d.optString("id");render()}}}
+            "Image library"->{architectureDefaults();actions(tr("Import ISO") to {pickIso()},tr("Advanced manual setup") to {profile(JSONObject())});isoTrustCheck=CheckBox(this).apply{text=tr("Trust selected local ISO source");isChecked=trustLocalIso;setTextColor(ink);setOnCheckedChangeListener{_,checked->trustLocalIso=checked}};content.addView(isoTrustCheck);snapshot.optJSONArray("profiles")?.each {p->row(p.optString("system_name").ifBlank{p.optString("name")},"${p.optString("name")}  ${p.optString("architecture")}  ${p.optString("kind")}",(if(p.optString("status")=="needs-attention")tr("Needs setup") else p.optString("media")),logoId(p),selected=p.optString("id")==selectedProfileId,longAction={profileMenu(p)}){selectedProfileId=p.optString("id");render()}}}
+            else->{val logBar=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(0,dp(4),0,dp(12))};val filterRow=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL};filterRow.addView(button(tr("Log level"),action={chooseLogLevel()}),LinearLayout.LayoutParams(-2,-2).apply{marginEnd=dp(16)});filterRow.addView(CheckBox(this).apply{text=tr("Include private data");isChecked=exportRaw;setTextColor(ink);setOnCheckedChangeListener{_,checked->exportRaw=checked}},LinearLayout.LayoutParams(0,-2,1f));logBar.addView(filterRow);logBar.addView(button(tr("Export diagnostics"),action={saveDiagnostics()}),LinearLayout.LayoutParams(-2,-2).apply{topMargin=dp(12);gravity=Gravity.END});val logActions=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL};logActions.addView(button(tr("Clear logs")){request("/api/events","DELETE"){refresh()}},LinearLayout.LayoutParams(0,-2,1f));logActions.addView(button(tr("Back to top")){contentScroll.smoothScrollTo(0,0)},LinearLayout.LayoutParams(0,-2,1f));logBar.addView(logActions);logToolbar.addView(logBar);val events=snapshot.optJSONArray("events");if(events==null||events.length()==0)row(tr("No activity yet"),"",""){};events?.let{for(i in it.length()-1 downTo 0){val e=it.getJSONObject(i);row(e.optString("protocol"),e.optString("message"),e.optString("device")) {}}}}
         }
     }
-    private fun chooseLogLevel(){val levels=arrayOf(t("错误","Errors"),t("常规","Standard"),t("详细","Detailed"));val values=arrayOf("error","info","debug");AlertDialog.Builder(this).setTitle(t("日志级别","Log level")).setSingleChoiceItems(levels,values.indexOf(exportLogLevel)){dialog,index->exportLogLevel=values[index];dialog.dismiss()}.show()}
+    private fun chooseLogLevel(){val levels=arrayOf(tr("Errors"),tr("Standard"),tr("Detailed"));val values=arrayOf("error","info","debug");AlertDialog.Builder(this).setTitle(tr("Log level")).setSingleChoiceItems(levels,values.indexOf(exportLogLevel)){dialog,index->exportLogLevel=values[index];dialog.dismiss()}.show()}
     private fun saveDiagnostics(){
         val start={startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply{addCategory(Intent.CATEGORY_OPENABLE);type="text/plain";putExtra(Intent.EXTRA_TITLE,"bootah-diagnostics.txt")},42)}
-        if(exportRaw)AlertDialog.Builder(this).setTitle(t("原始日志包含隐私信息","Raw logs contain private data")).setMessage(t("原始日志可能包含设备地址和本地文件路径。","Raw logs may contain device addresses and local file paths.")).setNegativeButton(tr("取消"),null).setPositiveButton(t("继续","Continue")){_,_->start()}.show() else start()
+        if(exportRaw)AlertDialog.Builder(this).setTitle(tr("Raw logs contain private data")).setMessage(tr("Raw logs may contain device addresses and local file paths.")).setNegativeButton(tr("Cancel"),null).setPositiveButton(tr("Continue")){_,_->start()}.show() else start()
     }
     private fun exportDiagnostics(uri:android.net.Uri){
         val level=exportLogLevel;val raw=exportRaw
-        worker.execute{try{val binary=java.io.File(applicationInfo.nativeLibraryDir,"libnetboot_core.so");val config=java.io.File(filesDir,"state.json");val command=mutableListOf(binary.path,"--export-diagnostics","--config",config.path,"--log-level",level);if(raw)command.add("--include-private");val process=ProcessBuilder(command).start();val data=process.inputStream.use{it.readBytes()};val errors=process.errorStream.bufferedReader().use{it.readText()};if(process.waitFor()!=0)throw java.io.IOException(errors);contentResolver.openOutputStream(uri,"w")?.use{it.write(data)}?:throw java.io.IOException("Cannot open destination");runOnUiThread{Toast.makeText(this,t("诊断日志已导出","Diagnostics exported"),Toast.LENGTH_LONG).show()}}catch(e:Exception){runOnUiThread{Toast.makeText(this,e.message?:t("导出失败","Export failed"),Toast.LENGTH_LONG).show()}}}
+        worker.execute{try{val binary=java.io.File(applicationInfo.nativeLibraryDir,"libnetboot_core.so");val config=java.io.File(filesDir,"state.json");val command=mutableListOf(binary.path,"--export-diagnostics","--config",config.path,"--log-level",level);if(raw)command.add("--include-private");val process=ProcessBuilder(command).start();val data=process.inputStream.use{it.readBytes()};val errors=process.errorStream.bufferedReader().use{it.readText()};if(process.waitFor()!=0)throw java.io.IOException(errors);contentResolver.openOutputStream(uri,"w")?.use{it.write(data)}?:throw java.io.IOException("Cannot open destination");runOnUiThread{Toast.makeText(this,tr("Diagnostics exported"),Toast.LENGTH_LONG).show()}}catch(e:Exception){runOnUiThread{Toast.makeText(this,e.message?:tr("Export failed"),Toast.LENGTH_LONG).show()}}}
     }
 
 
@@ -265,18 +264,18 @@ class MainActivity : Activity() {
         }
         AlertDialog.Builder(this).setTitle(title).setAdapter(adapter){_,which->if(enabled[which])choose(which)}.show()
     }
-    private fun deviceMenu(d:JSONObject){itemMenu(d.optString("name").ifBlank{d.optString("mac")},arrayOf(tr("编辑"),tr("自动安装配置")),booleanArrayOf(true,automationSupported(deviceProfile(d)))){which->if(which==0)device(d) else chooseAutomation("device",d.optString("id"))}}
+    private fun deviceMenu(d:JSONObject){itemMenu(d.optString("name").ifBlank{d.optString("mac")},arrayOf(tr("Edit"),tr("Automatic installation")),booleanArrayOf(true,automationSupported(deviceProfile(d)))){which->if(which==0)device(d) else chooseAutomation("device",d.optString("id"))}}
 
     private fun pickIso(){pendingIsoTrust=trustLocalIso;trustLocalIso=false;isoTrustCheck?.isChecked=false;startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply{type="*/*";addCategory(Intent.CATEGORY_OPENABLE);putExtra(Intent.EXTRA_MIME_TYPES,arrayOf("application/x-iso9660-image","application/octet-stream"))},40)}
     @Deprecated("Framework activity result compatibility")
     override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?){super.onActivityResult(requestCode,resultCode,data);if(requestCode==41){val pending=pendingAutomation;val next=pendingAutomationNext;pendingAutomation=null;pendingAutomationNext=null;if(resultCode==RESULT_OK&&pending!=null&&data?.data!=null)uploadAutomation(pending,data.data!!,next?:{} ) else next?.invoke();return};if(resultCode!=RESULT_OK)return;val uri=data?.data?:return
         if(requestCode==42){exportDiagnostics(uri);return}
         if(requestCode!=40)return
-        if(endpoint!="http://127.0.0.1:9080"){Toast.makeText(this,tr("ISO 导入需连接本机服务"),Toast.LENGTH_LONG).show();return}
+        if(endpoint!="http://127.0.0.1:9080"){Toast.makeText(this,tr("ISO import requires a local service"),Toast.LENGTH_LONG).show();return}
         importUri(uri,pendingIsoTrust)
     }
     private fun importUri(uri:android.net.Uri,trustSelectedIso:Boolean=false){
-        state.text=t("正在导入…","Importing…")
+        state.text=tr("Importing…")
         worker.execute{
             val directory=java.io.File(filesDir,"imports/${java.util.UUID.randomUUID()}")
             var submitted=false
@@ -290,14 +289,14 @@ class MainActivity : Activity() {
                 runOnUiThread{
                     request("/api/media/import","POST",JSONObject().put("path",iso.absolutePath).put("trust_local_iso",trustSelectedIso),failed={code->
                         if(code!=null&&code in 400..499)directory.deleteRecursively()
-                        else Toast.makeText(this,t("未能确认导入结果，已保留 ISO 以免破坏启动引用。","Import outcome is uncertain; ISO retained to preserve boot references."),Toast.LENGTH_LONG).show()
+                        else Toast.makeText(this,tr("Import outcome is uncertain; ISO retained to preserve boot references."),Toast.LENGTH_LONG).show()
                     }){text->
                         // Profiles read this original ISO on demand after import.
                         val result=JSONObject(text);refresh()
                         val warnings=result.optJSONArray("warnings")
                         val notes=(0 until (warnings?.length()?:0)).map{warnings!!.getString(it)}
-                        Toast.makeText(this,tr("ISO 导入完成"),Toast.LENGTH_SHORT).show()
-                        if(notes.isNotEmpty())AlertDialog.Builder(this).setTitle(tr("需要处理的问题")).setMessage(notes.map(::message).joinToString("\n\n")).setPositiveButton(tr("确定"),null).show()
+                        Toast.makeText(this,tr("ISO imported"),Toast.LENGTH_SHORT).show()
+                        if(notes.isNotEmpty())AlertDialog.Builder(this).setTitle(tr("Action required")).setMessage(notes.map(::message).joinToString("\n\n")).setPositiveButton(tr("OK"),null).show()
                     }
                 }
             }catch(e:Exception){
@@ -310,22 +309,22 @@ class MainActivity : Activity() {
     private fun chooseAutomation(scope:String,id:String,after:()->Unit={}){
         val profileId=if(scope=="profile")id else {val device=snapshot.optJSONArray("devices")?.let{items->(0 until items.length()).map{items.getJSONObject(it)}.firstOrNull{it.optString("id")==id}};device?.optString("profile_id")?.takeIf{it.isNotBlank()&&it!="null"}?:snapshot.optJSONObject("default_profiles")?.optString(device?.optString("architecture"))?:""}
         if(profileId.isBlank()){after();return}
-        request("/api/profiles/$profileId/automation-methods"){response->val array=JSONArray(response);val methods=(0 until array.length()).map{array.getString(it)};if(methods.isEmpty()){after();return@request};val choices=listOf(t("不使用自动配置","No automatic configuration"))+methods;AlertDialog.Builder(this).setTitle(t("自动安装配置","Automatic installation")).setItems(choices.toTypedArray()){_,index->if(index==0){request("/api/automation/$scope/$id","DELETE"){refresh();after()}}else{pendingAutomation=Triple(scope,id,methods[index-1]);pendingAutomationNext=after;startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply{type="*/*";addCategory(Intent.CATEGORY_OPENABLE)},41)}}.setNegativeButton(t("稍后","Later")){_,_->after()}.show()}
+        request("/api/profiles/$profileId/automation-methods"){response->val array=JSONArray(response);val methods=(0 until array.length()).map{array.getString(it)};if(methods.isEmpty()){after();return@request};val choices=listOf(tr("No automatic configuration"))+methods;AlertDialog.Builder(this).setTitle(tr("Automatic installation")).setItems(choices.toTypedArray()){_,index->if(index==0){request("/api/automation/$scope/$id","DELETE"){refresh();after()}}else{pendingAutomation=Triple(scope,id,methods[index-1]);pendingAutomationNext=after;startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply{type="*/*";addCategory(Intent.CATEGORY_OPENABLE)},41)}}.setNegativeButton(tr("Later")){_,_->after()}.show()}
     }
-    private fun uploadAutomation(pending:Triple<String,String,String>,uri:android.net.Uri,next:()->Unit={}){worker.execute{try{val name=contentResolver.query(uri,arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),null,null,null)?.use{if(it.moveToFirst())it.getString(0) else "config"}?:"config";val address="$endpoint/api/automation/${pending.first}/${pending.second}?method=${java.net.URLEncoder.encode(pending.third,"UTF-8")}&filename=${java.net.URLEncoder.encode(name,"UTF-8")}";val connection=URL(address).openConnection() as HttpURLConnection;authorize(connection);connection.requestMethod="PUT";connection.doOutput=true;connection.connectTimeout=5000;connection.readTimeout=30000;contentResolver.openInputStream(uri)!!.use{input->connection.outputStream.use{input.copyTo(it)}};val code=connection.responseCode;val error=if(code in 200..299 && connection.getHeaderField("X-Bootah-Authentication")!="bearer-v1")tr("核心未确认令牌鉴权") else if(code !in 200..299)connection.errorStream?.bufferedReader()?.use{it.readText()}?.let{tr(it)} else null;connection.disconnect();runOnUiThread{if(error!=null)Toast.makeText(this,error,Toast.LENGTH_LONG).show();refresh();next()}}catch(e:Exception){runOnUiThread{Toast.makeText(this,e.message?.let{tr(it)}?:t("请求失败","Request failed"),Toast.LENGTH_LONG).show();next()}}}}
+    private fun uploadAutomation(pending:Triple<String,String,String>,uri:android.net.Uri,next:()->Unit={}){worker.execute{try{val name=contentResolver.query(uri,arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),null,null,null)?.use{if(it.moveToFirst())it.getString(0) else "config"}?:"config";val address="$endpoint/api/automation/${pending.first}/${pending.second}?method=${java.net.URLEncoder.encode(pending.third,"UTF-8")}&filename=${java.net.URLEncoder.encode(name,"UTF-8")}";val connection=URL(address).openConnection() as HttpURLConnection;authorize(connection);connection.requestMethod="PUT";connection.doOutput=true;connection.connectTimeout=5000;connection.readTimeout=30000;contentResolver.openInputStream(uri)!!.use{input->connection.outputStream.use{input.copyTo(it)}};val code=connection.responseCode;val error=if(code in 200..299 && connection.getHeaderField("X-Bootah-Authentication")!="bearer-v1")tr("The core did not confirm token authentication") else if(code !in 200..299)connection.errorStream?.bufferedReader()?.use{it.readText()}?.let{tr(it)} else null;connection.disconnect();runOnUiThread{if(error!=null)Toast.makeText(this,error,Toast.LENGTH_LONG).show();refresh();next()}}catch(e:Exception){runOnUiThread{Toast.makeText(this,e.message?.let{tr(it)}?:tr("Request failed"),Toast.LENGTH_LONG).show();next()}}}}
     private fun dialog(title:String,fields:List<Pair<String,String>>,checks:List<Pair<String,Boolean>> = emptyList(),save:(Map<String,String>)->Unit){
         val panel=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(32,12,32,12)}
-        val inputs=fields.map{(label,value)->val input=EditText(this).apply{hint=tr(label);setText(value);isSingleLine=label!="启动文件映射"};panel.addView(input);label to input}.toMap()
+        val inputs=fields.map{(label,value)->val input=EditText(this).apply{hint=tr(label);setText(value);isSingleLine=label!="Boot file mappings"};panel.addView(input);label to input}.toMap()
         val toggles=checks.map{(label,value)->val input=CheckBox(this).apply{text=tr(label);isChecked=value};panel.addView(input);label to input}.toMap()
-        AlertDialog.Builder(this).setTitle(title).setView(ScrollView(this).apply{addView(panel)}).setNegativeButton(tr("取消"),null).setPositiveButton(tr("保存")){_,_->save(inputs.mapValues{it.value.text.toString()}+toggles.mapValues{it.value.isChecked.toString()})}.show()
+        AlertDialog.Builder(this).setTitle(title).setView(ScrollView(this).apply{addView(panel)}).setNegativeButton(tr("Cancel"),null).setPositiveButton(tr("Save")){_,_->save(inputs.mapValues{it.value.text.toString()}+toggles.mapValues{it.value.isChecked.toString()})}.show()
     }
     private fun device(d:JSONObject){
         val panel=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(24),dp(8),dp(24),dp(8))}
-        panel.addView(TextView(this).apply{text=tr("至少填写 MAC 或 IP");setTextColor(muted);textSize=13f})
-        val inputs=listOf("MAC" to "mac","IP" to "ip","名称" to "name","型号" to "model").associate{(label,key)->panel.addView(TextView(this).apply{text=tr(label);textSize=12f;setTextColor(muted);setPadding(0,dp(12),0,0)});val edit=EditText(this).apply{isSingleLine=true;setText(d.optString(key).takeIf{it!="null"}.orEmpty())};panel.addView(edit);key to edit}
-        val profiles=snapshot.optJSONArray("profiles")?:JSONArray();val defaultId=snapshot.optJSONObject("default_profiles")?.optString(d.optString("architecture"));val defaultName=(0 until profiles.length()).map{profiles.getJSONObject(it)}.firstOrNull{it.optString("id")==defaultId}?.optString("name");val names=mutableListOf(defaultName?.let{tr("按架构自动分配")+"  "+it}?:tr("未分配镜像"));profiles.each{names.add(it.optString("name"))};panel.addView(TextView(this).apply{text=tr("启动镜像");setTextColor(muted);textSize=12f;setPadding(0,dp(16),0,0)})
+        panel.addView(TextView(this).apply{text=tr("Enter a MAC or IP address");setTextColor(muted);textSize=13f})
+        val inputs=listOf("MAC" to "mac","IP" to "ip","Name" to "name","Model" to "model").associate{(label,key)->panel.addView(TextView(this).apply{text=tr(label);textSize=12f;setTextColor(muted);setPadding(0,dp(12),0,0)});val edit=EditText(this).apply{isSingleLine=true;setText(d.optString(key).takeIf{it!="null"}.orEmpty())};panel.addView(edit);key to edit}
+        val profiles=snapshot.optJSONArray("profiles")?:JSONArray();val defaultId=snapshot.optJSONObject("default_profiles")?.optString(d.optString("architecture"));val defaultName=(0 until profiles.length()).map{profiles.getJSONObject(it)}.firstOrNull{it.optString("id")==defaultId}?.optString("name");val names=mutableListOf(defaultName?.let{tr("Assign by architecture")+"  "+it}?:tr("No image assigned"));profiles.each{names.add(it.optString("name"))};panel.addView(TextView(this).apply{text=tr("Boot image");setTextColor(muted);textSize=12f;setPadding(0,dp(16),0,0)})
         val picker=Spinner(this);picker.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,names);for(i in 0 until profiles.length())if(profiles.getJSONObject(i).optString("id")==d.optString("profile_id"))picker.setSelection(i+1);panel.addView(picker)
-        AlertDialog.Builder(this).setTitle(tr("设备")).setView(ScrollView(this).apply{addView(panel)}).setNegativeButton(tr("取消"),null).setPositiveButton(tr("保存")){_,_->if(inputs["mac"]?.text.isNullOrBlank()&&inputs["ip"]?.text.isNullOrBlank()){Toast.makeText(this,tr("至少填写 MAC 或 IP"),Toast.LENGTH_LONG).show();return@setPositiveButton};for((key,edit)in inputs)d.put(key,if(key=="ip"&&edit.text.isBlank())JSONObject.NULL else edit.text.toString());d.put("profile_id",if(picker.selectedItemPosition==0)JSONObject.NULL else profiles.getJSONObject(picker.selectedItemPosition-1).getString("id"));request("/api/devices","POST",d){refresh()}}.show()
+        AlertDialog.Builder(this).setTitle(tr("Devices")).setView(ScrollView(this).apply{addView(panel)}).setNegativeButton(tr("Cancel"),null).setPositiveButton(tr("Save")){_,_->if(inputs["mac"]?.text.isNullOrBlank()&&inputs["ip"]?.text.isNullOrBlank()){Toast.makeText(this,tr("Enter a MAC or IP address"),Toast.LENGTH_LONG).show();return@setPositiveButton};for((key,edit)in inputs)d.put(key,if(key=="ip"&&edit.text.isBlank())JSONObject.NULL else edit.text.toString());d.put("profile_id",if(picker.selectedItemPosition==0)JSONObject.NULL else profiles.getJSONObject(picker.selectedItemPosition-1).getString("id"));request("/api/devices","POST",d){refresh()}}.show()
     }
     private fun profile(original:JSONObject){
         if(original.has("id")&&original.optJSONObject("secure_boot")?.optBoolean("eligible")==true){
@@ -344,18 +343,18 @@ class MainActivity : Activity() {
             note(label)
             return EditText(this).apply{setText(value);setTextColor(ink);isSingleLine=!multiline;isEnabled=editable;targetPanel.addView(this)}
         }
-        val name=input(tr("名称"),p.optString("name"))
-        if(p.optString("media").isNotBlank())note(tr("镜像文件")+"\n"+p.optString("media"))
+        val name=input(tr("Name"),p.optString("name"))
+        if(p.optString("media").isNotBlank())note(tr("Image file")+"\n"+p.optString("media"))
         var parameterEditable=!existing
         var parameterEnabled=secured
         val parameterPanel=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;visibility=if(existing)View.GONE else View.VISIBLE};panel.addView(parameterPanel);targetPanel=parameterPanel
-        if(p.optString("kind")=="windows")note(t("Windows 参数示例：bootlog=on sos=on；多启动项使用 entry={GUID} 指定。","Windows options: bootlog=on sos=on; use entry={GUID} for multiple boot entries."))
-        val args=input(t("启动参数","Boot parameters"),p.optString("arguments"),true,true)
+        if(p.optString("kind")=="windows")note(tr("Windows options: bootlog=on sos=on; use entry={GUID} for multiple boot entries."))
+        val args=input(tr("Boot parameters"),p.optString("arguments"),true,true)
         if(existing){
             var importedArguments:String?=null
-            val reset=Button(this).apply{text=t("恢复导入时参数","Restore imported parameters");isEnabled=false;setOnClickListener{args.setText(importedArguments)}};parameterPanel.addView(reset)
+            val reset=Button(this).apply{text=tr("Restore imported parameters");isEnabled=false;setOnClickListener{args.setText(importedArguments)}};parameterPanel.addView(reset)
             val preview=EditText(this).apply{isFocusable=false;setTextIsSelectable(true);visibility=View.GONE;minLines=3}
-            parameterPanel.addView(Button(this).apply{text=t("查看参数预览","Preview parameters");setOnClickListener{val draft=JSONObject(p.toString()).put("arguments",args.text.toString());request("/api/profiles/${p.getString("id")}/parameters","POST",draft){text->preview.setText(JSONObject(text).optString("preview"));preview.visibility=View.VISIBLE}}});parameterPanel.addView(preview)
+            parameterPanel.addView(Button(this).apply{text=tr("Preview parameters");setOnClickListener{val draft=JSONObject(p.toString()).put("arguments",args.text.toString());request("/api/profiles/${p.getString("id")}/parameters","POST",draft){text->preview.setText(JSONObject(text).optString("preview"));preview.visibility=View.VISIBLE}}});parameterPanel.addView(preview)
             request("/api/profiles/${p.getString("id")}/parameters"){text->val info=JSONObject(text);importedArguments=if(info.isNull("original_arguments"))null else info.optString("original_arguments");reset.isEnabled=importedArguments!=null&&info.optBoolean("editable");parameterEditable=info.optBoolean("editable");parameterPanel.visibility=if(parameterEditable&&(p.optString("kind")!="windows-pe-iso"||parameterEnabled))View.VISIBLE else View.GONE;}
         }
         targetPanel=panel
@@ -363,33 +362,33 @@ class MainActivity : Activity() {
         var picker:Spinner?=null
         val modes=support?.optJSONArray("modes")?:JSONArray()
         if(support?.optBoolean("eligible")==true){
-            toggle=android.widget.Switch(this).apply{text=t("安全启动支持","Secure Boot support");isChecked=secured;panel.addView(this)}
+            toggle=android.widget.Switch(this).apply{text=tr("Secure Boot support");isChecked=secured;panel.addView(this)}
             if(p.optString("kind")=="windows-pe-iso")toggle.setOnCheckedChangeListener{_,enabled->parameterEnabled=enabled;parameterPanel.visibility=if(parameterEditable&&enabled)View.VISIBLE else View.GONE}
-            picker=Spinner(this).apply{adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,(0 until modes.length()).map{if(modes.getString(it)=="signed-ipxe")"iPXE shim" else t("原生网络启动","Native network boot")});setSelection((0 until modes.length()).firstOrNull{modes.getString(it)==support.optString("mode")}?:0);panel.addView(this)}
+            picker=Spinner(this).apply{adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,(0 until modes.length()).map{if(modes.getString(it)=="signed-ipxe")"iPXE shim" else tr("Native network boot")});setSelection((0 until modes.length()).firstOrNull{modes.getString(it)==support.optString("mode")}?:0);panel.addView(this)}
             note(message(support.optString("detail")))
             support.optJSONArray("components")?.each{c->note(listOf("file","signer","issuer","sha256","certificate_sha256").joinToString("\n"){c.optString(it)})}
         }
         val advanced=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;visibility=if(existing)View.GONE else View.VISIBLE}
-        panel.addView(Button(this).apply{text=t("高级设置","Advanced settings");setOnClickListener{advanced.visibility=if(advanced.visibility==View.VISIBLE)View.GONE else View.VISIBLE}})
+        panel.addView(Button(this).apply{text=tr("Advanced settings");setOnClickListener{advanced.visibility=if(advanced.visibility==View.VISIBLE)View.GONE else View.VISIBLE}})
         val fields=linkedMapOf<String,EditText>()
-        for((key,label,default)in listOf(Triple("architecture",tr("架构"),"arm64"),Triple("kind",tr("类型"),"linux"),Triple("root",tr("目录"),""),Triple("kernel",tr("内核"),""),Triple("initrd","Initrd",""),Triple("dtb","DTB",""))){
+        for((key,label,default)in listOf(Triple("architecture",tr("Architecture"),"arm64"),Triple("kind",tr("Type"),"linux"),Triple("root",tr("Directory"),""),Triple("kernel",tr("Kernel"),""),Triple("initrd","Initrd",""),Triple("dtb","DTB",""))){
             advanced.addView(TextView(this).apply{text=label;setTextColor(muted)})
             val edit=EditText(this).apply{setText(p.optString(key,default));isEnabled=!secured;setTextColor(ink)};advanced.addView(edit);fields[key]=edit
         }
-        advanced.addView(TextView(this).apply{text=tr("启动文件映射");setTextColor(muted)})
+        advanced.addView(TextView(this).apply{text=tr("Boot file mappings");setTextColor(muted)})
         val mapping=EditText(this).apply{setText(p.optJSONObject("boot_files")?.let{f->f.keys().asSequence().sorted().joinToString("\n"){"$it=${f.getString(it)}"}}.orEmpty());isEnabled=!secured;minLines=3};advanced.addView(mapping);panel.addView(advanced)
         p.optJSONObject("boot_evidence")?.let{e->
-            note(t("识别与检查结果","Detection and check results"))
-            for((key,label)in listOf("config" to tr("启动配置"),"entry" to tr("入口"),"kernel" to tr("内核"),"initrd" to "Initrd"))if(e.optString(key).isNotBlank())note(label+"\n"+e.optString(key))
-            val source=when(e.optString("source")){"http-tree"->"HTTP 安装树";"http-iso"->"HTTP 原盘";"nfs-tree"->"只读 NFS 文件树";"nbd"->"只读 NBD 原盘";"external"->"外部安装源";"local-media"->"需要本地介质";else->"未识别安装源"};note(tr("安装源")+"\n"+tr(source))
-            e.optJSONArray("diagnostics")?.each{d->if(d.optString("code") !in setOf("BOOT_CONFIG_FAMILY_LAYOUT","UOS_MANUAL_ONLY"))note(tr("需要处理的问题")+"\n"+message(d.optString("detail")))}
+            note(tr("Detection and check results"))
+            for((key,label)in listOf("config" to tr("Boot configuration"),"entry" to tr("Entry"),"kernel" to tr("Kernel"),"initrd" to "Initrd"))if(e.optString(key).isNotBlank())note(label+"\n"+e.optString(key))
+            val source=when(e.optString("source")){"http-tree"->"HTTP installation tree";"http-iso"->"HTTP ISO";"nfs-tree"->"Read-only NFS file tree";"nbd"->"Read-only NBD ISO";"external"->"External installation source";"local-media"->"Local media required";else->"Unrecognized installation source"};note(tr("Installation source")+"\n"+tr(source))
+            e.optJSONArray("diagnostics")?.each{d->if(d.optString("code") !in setOf("BOOT_CONFIG_FAMILY_LAYOUT","UOS_MANUAL_ONLY"))note(tr("Action required")+"\n"+message(d.optString("detail")))}
         }
-        val dialog=AlertDialog.Builder(this).setTitle(t("镜像设置","Image settings")).setView(ScrollView(this).apply{addView(panel)}).setNegativeButton(tr("取消"),null).setPositiveButton(tr("保存"),null).create()
+        val dialog=AlertDialog.Builder(this).setTitle(tr("Image settings")).setView(ScrollView(this).apply{addView(panel)}).setNegativeButton(tr("Cancel"),null).setPositiveButton(tr("Save"),null).create()
         dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
             val files=JSONObject()
             for(line in mapping.text.toString().lines().filter{it.isNotBlank()}){
                 val pair=line.split('=',limit=2)
-                if(pair.size!=2||pair[0].isBlank()||pair[1].isBlank()||files.has(pair[0].trim())){mapping.error=tr("请按 x64-efi=bootx64.efi 的格式填写，每行一项");return@setOnClickListener}
+                if(pair.size!=2||pair[0].isBlank()||pair[1].isBlank()||files.has(pair[0].trim())){mapping.error=tr("Use x64-efi=bootx64.efi, one mapping per line");return@setOnClickListener}
                 files.put(pair[0].trim(),pair[1].trim())
             }
             p.put("id",p.optString("id",java.util.UUID.randomUUID().toString())).put("name",name.text.toString()).put("arguments",args.text.toString()).put("boot_files",files)
@@ -401,25 +400,25 @@ class MainActivity : Activity() {
         dialog.show()
     }
     private fun profileMenu(p:JSONObject){
-        val labels=arrayOf(t("镜像设置","Image settings"),tr("自动安装配置"),tr("启动方式"),tr("删除"))
+        val labels=arrayOf(tr("Image settings"),tr("Automatic installation"),tr("Boot options"),tr("Delete"))
         itemMenu(p.optString("name"),labels,booleanArrayOf(true,automationSupported(p.optString("id")),true,true)){index->when(index){0->profile(p);1->chooseAutomation("profile",p.getString("id"));2->manual(p);3->request("/api/profiles/${p.getString("id")}","DELETE"){refresh()}}}
     }
     private val firmwareKeys=setOf("x86-bios","ia64","ia32-efi","x64-efi","ebc-efi","alpha","sparc64","powerpc-of","powerpc-epapr","power-opal","arm32-efi","arm64-efi","ia32-http","x64-http","arm32-http","arm64-http","arm32-uboot","arm64-uboot","riscv32-efi","riscv64-http","loongarch64-efi","riscv64-efi","hp-rmp")
     private fun architectureDefaults(){
-        content.addView(TextView(this).apply{text=tr("架构默认启动镜像");setTextColor(ink);textSize=18f})
+        content.addView(TextView(this).apply{text=tr("Default boot images by architecture");setTextColor(ink);textSize=18f})
         val defaults=snapshot.optJSONObject("default_profiles")?:JSONObject()
         val profiles=snapshot.optJSONArray("profiles")?:JSONArray()
         for(key in (0 until profiles.length()).flatMap{profiles.getJSONObject(it).optJSONObject("boot_files")?.keys()?.asSequence()?.toList().orEmpty()}.filter{it in firmwareKeys}.distinct().sorted()){
             val candidates=(0 until profiles.length()).map{profiles.getJSONObject(it)}.filter{it.optJSONObject("boot_files")?.has(key)==true}
-            val name=candidates.firstOrNull{it.optString("id")==defaults.optString(key)}?.optString("name")?:tr("未设置")
+            val name=candidates.firstOrNull{it.optString("id")==defaults.optString(key)}?.optString("name")?:tr("Not configured")
             row(key,"",name){
-                val labels=(listOf(tr("未设置"))+candidates.map{it.optString("name")}).toTypedArray()
+                val labels=(listOf(tr("Not configured"))+candidates.map{it.optString("name")}).toTypedArray()
                 val selected=candidates.indexOfFirst{it.optString("id")==defaults.optString(key)}+1
                 AlertDialog.Builder(this).setTitle(key).setSingleChoiceItems(labels,selected){dialog,index->
                     val changed=JSONObject((snapshot.optJSONObject("default_profiles")?:JSONObject()).toString())
                     if(index==0)changed.remove(key) else changed.put(key,candidates[index-1].getString("id"))
                     dialog.dismiss();request("/api/default-profiles","PUT",changed){refresh()}
-                }.setNegativeButton(tr("取消"),null).show()
+                }.setNegativeButton(tr("Cancel"),null).show()
             }
         }
     }
@@ -429,31 +428,31 @@ class MainActivity : Activity() {
             val commands=result.optString("commands")
             val notesArray=result.optJSONArray("notes")
             val notes=(0 until (notesArray?.length()?:0)).mapNotNull{notesArray?.optString(it)}.map(::message).joinToString("\n")
-            val status=tr(if(commands.isNotBlank())"在固件中执行以下命令" else if(result.optString("firmware") in setOf("pxe","efi"))"从固件菜单选择网络启动，无需输入命令" else if(result.optString("firmware")=="openfirmware")"请使用固件的网络启动入口" else "请先完成启动配置，详见下方说明")
+            val status=tr(if(commands.isNotBlank())"Run these commands in the firmware" else if(result.optString("firmware") in setOf("pxe","efi"))"Select network boot in the firmware menu; no command is needed" else if(result.optString("firmware")=="openfirmware")"Use the network boot option in the firmware" else "Complete the boot configuration using the notes below")
             val panel=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(24),dp(8),dp(24),dp(8))}
             panel.addView(TextView(this).apply{text=status;textSize=13f;setTextColor(muted)})
             if(commands.isNotBlank())panel.addView(TextView(this).apply{text=commands;typeface=Typeface.MONOSPACE;textSize=13f;setTextColor(ink);setTextIsSelectable(true);setPadding(0,dp(12),0,0)})
             if(notes.isNotBlank())panel.addView(TextView(this).apply{text=notes;textSize=13f;setTextColor(muted);setPadding(0,dp(12),0,0)})
-            val dialog=AlertDialog.Builder(this).setTitle(result.optString("title")).setView(ScrollView(this).apply{addView(panel)}).setNegativeButton(t("关闭","Close"),null)
-            if(commands.isNotBlank())dialog.setPositiveButton(t("复制命令","Copy commands")){_,_->(getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("Boot commands",commands))}
+            val dialog=AlertDialog.Builder(this).setTitle(result.optString("title")).setView(ScrollView(this).apply{addView(panel)}).setNegativeButton(tr("Close"),null)
+            if(commands.isNotBlank())dialog.setPositiveButton(tr("Copy commands")){_,_->(getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText("Boot commands",commands))}
             dialog.show()
         }
     }
     private fun settings(){
-        AlertDialog.Builder(this).setTitle(tr("设置")).setItems(arrayOf("连接","网络","本机启动","Root 启动","结束本机服务","关于与开源许可","重新检查权限").map(::tr).plus(t("Windows 安装源服务","Windows installation source")).toTypedArray()){_,index->
+        AlertDialog.Builder(this).setTitle(tr("Settings")).setItems(arrayOf("Connection","Network","Start local service","Start with root","Stop local service","About & open-source licenses","Check permissions again").map(::tr).plus(tr("Windows installation source")).toTypedArray()){_,index->
             if(index==0)connectionSettings()
             else when(index){1->network();2->startForegroundService(Intent(this,CoreService::class.java));3->startForegroundService(Intent(this,CoreService::class.java).putExtra("root",true));4->stopService(Intent(this,CoreService::class.java));5->about();6->checkPermissions(true);7->configureSmb()}
         }.show()
     }
     private fun connectionSettings(){
         val panel=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(24),dp(12),dp(24),0)}
-        val address=EditText(this).apply{hint=tr("服务地址");setText(endpoint);isSingleLine=true}
-        val secret=EditText(this).apply{hint=tr("管理令牌");inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD;setText(if(localCore()&&ApiCredentials.localToken!=null)"" else token().orEmpty())}
-        val save=CheckBox(this).apply{text=tr("安全保存令牌");isChecked=true}
+        val address=EditText(this).apply{hint=tr("Service address");setText(endpoint);isSingleLine=true}
+        val secret=EditText(this).apply{hint=tr("Management token");inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD;setText(if(localCore()&&ApiCredentials.localToken!=null)"" else token().orEmpty())}
+        val save=CheckBox(this).apply{text=tr("Save token securely");isChecked=true}
         panel.addView(address);panel.addView(secret);panel.addView(save)
-        AlertDialog.Builder(this).setTitle(tr("连接")).setView(panel).setNegativeButton(tr("取消"),null).setPositiveButton(tr("保存")){_,_->
+        AlertDialog.Builder(this).setTitle(tr("Connection")).setView(panel).setNegativeButton(tr("Cancel"),null).setPositiveButton(tr("Save")){_,_->
             val url=address.text.toString().trim().trimEnd('/');val value=secret.text.toString().trim();getPreferences(0).edit().putString("endpoint",url).apply();sessionToken=value.ifEmpty{null}
-            if(save.isChecked&&value.isNotEmpty())try{ApiCredentials.save(this,url,value)}catch(_:Exception){ApiCredentials.remove(this,url);Toast.makeText(this,tr("无法安全保存令牌"),Toast.LENGTH_LONG).show()} else ApiCredentials.remove(this,url)
+            if(save.isChecked&&value.isNotEmpty())try{ApiCredentials.save(this,url,value)}catch(_:Exception){ApiCredentials.remove(this,url);Toast.makeText(this,tr("Could not save the token securely; it will be used for this session only"),Toast.LENGTH_LONG).show()} else ApiCredentials.remove(this,url)
             permissionsChecked=false;refresh()
         }.show()
     }
@@ -465,11 +464,11 @@ class MainActivity : Activity() {
             val state=JSONObject(text)
             val modes=arrayOf("off","auto","smb1","smb2")
             var selected=modes.indexOf(state.optString("configured_mode",state.optString("mode"))).coerceAtLeast(0)
-            val options=arrayOf(t("关闭","Off"),t("自动（按镜像）","Automatic (by image)"),"SMB1 — XP / Server 2003","SMB2 — Vista / Server 2008+")
-            AlertDialog.Builder(this).setTitle(t("Windows 安装源服务","Windows installation source")+" — "+state.optString("mode"))
+            val options=arrayOf(tr("Off"),tr("Automatic (by image)"),"SMB1 — XP / Server 2003","SMB2 — Vista / Server 2008+")
+            AlertDialog.Builder(this).setTitle(tr("Windows installation source")+" — "+state.optString("mode"))
                 .setSingleChoiceItems(options,selected){_,index->selected=index}
-                .setPositiveButton(t("应用","Apply")){_,_->switchSmb(modes[selected])}
-                .setNegativeButton(tr("取消")){_,_->changingSmb=false}
+                .setPositiveButton(tr("Apply")){_,_->switchSmb(modes[selected])}
+                .setNegativeButton(tr("Cancel")){_,_->changingSmb=false}
                 .setOnCancelListener{changingSmb=false}.show()
         }
     }
@@ -477,14 +476,14 @@ class MainActivity : Activity() {
         val body=JSONObject().put("mode",mode).put("confirm",expected!=null)
         if(expected!=null)body.put("expected_mode",expected)
         request("/api/smb","POST",body,quiet=true,failed={code->
-            if(code==null){changingSmb=false;Toast.makeText(this,t("无法连接安装源服务，请重试。","Could not reach the installation source service. Retry."),Toast.LENGTH_LONG).show()}
+            if(code==null){changingSmb=false;Toast.makeText(this,tr("Could not reach the installation source service. Retry."),Toast.LENGTH_LONG).show()}
         },failedBody={code,text->
             val conflict=try{JSONObject(text)}catch(_:Exception){JSONObject()}
             if(code==409&&conflict.optString("code")=="smb_switch_confirmation"){
-                AlertDialog.Builder(this).setTitle(t("停止当前安装源服务？","Stop the current installation source?"))
-                    .setMessage(conflict.optString(if(chinese)"message_zh" else "message")+"\n"+t("正在进行的 Windows 安装可能中断。","Windows installations in progress may be interrupted."))
-                    .setPositiveButton(if(mode=="off")t("停止服务","Stop service") else t("停止并切换","Stop and switch")){_,_->switchSmb(mode,conflict.getString("current_mode"))}
-                    .setNegativeButton(tr("取消")){_,_->changingSmb=false}
+                AlertDialog.Builder(this).setTitle(tr("Stop the current installation source?"))
+                    .setMessage(conflict.optString(if(chinese)"message_zh" else "message")+"\n"+tr("Windows installations in progress may be interrupted."))
+                    .setPositiveButton(if(mode=="off")tr("Stop service") else tr("Stop and switch")){_,_->switchSmb(mode,conflict.getString("current_mode"))}
+                    .setNegativeButton(tr("Cancel")){_,_->changingSmb=false}
                     .setOnCancelListener{changingSmb=false}.show()
             }else{changingSmb=false;Toast.makeText(this,text,Toast.LENGTH_LONG).show()}
         }){changingSmb=false;refresh()}
@@ -509,33 +508,33 @@ class MainActivity : Activity() {
                 return LinearLayout(this@MainActivity).apply{
                     orientation=LinearLayout.VERTICAL;setPadding(dp(24),dp(12),dp(24),dp(12))
                     addView(TextView(this@MainActivity).apply{text=entry.getString("name")+entry.optString("version").let{if(it.isBlank())"" else "  $it"};textSize=16f;setTextColor(ink);setTypeface(null,Typeface.BOLD)})
-                    addView(labeledLink("来源",entry.getString("source")){open(entry.getString("source"))})
-                    addView(labeledLink("许可协议",tr(entry.getString("license"))){
+                    addView(labeledLink("Source",entry.getString("source")){open(entry.getString("source"))})
+                    addView(labeledLink("License",tr(entry.getString("license"))){
                         val notice=entry.getString("notice")
                         if(notice.isEmpty())open(entry.getString("licenseUrl")) else {
                             val text=TextView(this@MainActivity).apply{setText(notice);textSize=13f;setTextColor(ink);setTextIsSelectable(true);setPadding(dp(24),dp(16),dp(24),dp(16))}
-                            AlertDialog.Builder(this@MainActivity).setTitle(entry.getString("name")+" — "+tr("许可协议")).setView(ScrollView(this@MainActivity).apply{addView(text)}).setPositiveButton(tr("关闭"),null).show()
+                            AlertDialog.Builder(this@MainActivity).setTitle(entry.getString("name")+" — "+tr("License")).setView(ScrollView(this@MainActivity).apply{addView(text)}).setPositiveButton(tr("Close"),null).show()
                         }
                     })
                 }
             }
         }
         val header=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(24),dp(12),dp(24),dp(12))
-            addView(TextView(this@MainActivity).apply{text="${tr("客户端版本")}: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})";setTextColor(ink)})
-            addView(TextView(this@MainActivity).apply{text="${tr("核心版本")}: "+(coreVersion?.let{"${it.optString("display")} (${it.optInt("build")})"}?:tr("不可用"));setTextColor(ink)})}
-        AlertDialog.Builder(this).setTitle(tr("关于与开源许可")).setView(ListView(this).apply{addHeaderView(header,null,false);setAdapter(adapter);divider=null}).setPositiveButton(tr("关闭"),null).show()
+            addView(TextView(this@MainActivity).apply{text="${tr("Client version")}: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})";setTextColor(ink)})
+            addView(TextView(this@MainActivity).apply{text="${tr("Core version")}: "+(coreVersion?.let{"${it.optString("display")} (${it.optInt("build")})"}?:tr("Unavailable"));setTextColor(ink)})}
+        AlertDialog.Builder(this).setTitle(tr("About & open-source licenses")).setView(ListView(this).apply{addHeaderView(header,null,false);setAdapter(adapter);divider=null}).setPositiveButton(tr("Close"),null).show()
     }
     private fun network(){
         val settings=snapshot.optJSONObject("settings")?:return
-        val fields=linkedMapOf("服务器 IPv4" to "server_ip","监听 IPv4" to "bind_ip","地址池起点" to "pool_start","地址池终点" to "pool_end","子网掩码" to "subnet","DHCP 端口" to "dhcp_port","TFTP 端口" to "tftp_port","HTTP 端口" to "http_port")
-        val proxyLabel=t("ProxyDHCP（外部 DHCP 分配地址）","ProxyDHCP (external DHCP assigns addresses)")
-        dialog(tr("网络"),fields.map{(label,key)->label to settings.optString(key)},listOf("自动检测 DHCP" to settings.optBoolean("dhcp_auto"),"分配地址" to settings.optBoolean("dhcp_enabled"),"以太网协议" to settings.optBoolean("ethernet_enabled"),proxyLabel to settings.optBoolean("proxy_dhcp_enabled"))){values->
-            for((label,key)in fields){val value=values[label].orEmpty();if(key.endsWith("_port")){val port=value.toIntOrNull();if(port==null||port !in 1..65535){Toast.makeText(this,tr("端口应为 1–65535"),Toast.LENGTH_LONG).show();return@dialog};settings.put(key,port)}else settings.put(key,value)}
-            val automatic=values["自动检测 DHCP"].toBoolean()
+        val fields=linkedMapOf("Server IPv4" to "server_ip","Listen IPv4" to "bind_ip","Pool start" to "pool_start","Pool end" to "pool_end","Subnet mask" to "subnet","DHCP port" to "dhcp_port","TFTP port" to "tftp_port","HTTP port" to "http_port")
+        val proxyLabel=tr("ProxyDHCP (external DHCP assigns addresses)")
+        dialog(tr("Network"),fields.map{(label,key)->label to settings.optString(key)},listOf("Detect DHCP automatically" to settings.optBoolean("dhcp_auto"),"Allocate addresses" to settings.optBoolean("dhcp_enabled"),"Ethernet protocols" to settings.optBoolean("ethernet_enabled"),proxyLabel to settings.optBoolean("proxy_dhcp_enabled"))){values->
+            for((label,key)in fields){val value=values[label].orEmpty();if(key.endsWith("_port")){val port=value.toIntOrNull();if(port==null||port !in 1..65535){Toast.makeText(this,tr("Port must be 1–65535"),Toast.LENGTH_LONG).show();return@dialog};settings.put(key,port)}else settings.put(key,value)}
+            val automatic=values["Detect DHCP automatically"].toBoolean()
             settings.put("dhcp_auto",automatic)
-            if(!automatic && values["分配地址"].toBoolean() && values[proxyLabel].toBoolean()){Toast.makeText(this,t("分配地址与 ProxyDHCP 不能同时开启","Address allocation and ProxyDHCP cannot both be enabled"),Toast.LENGTH_LONG).show();return@dialog}
+            if(!automatic && values["Allocate addresses"].toBoolean() && values[proxyLabel].toBoolean()){Toast.makeText(this,tr("Address allocation and ProxyDHCP cannot both be enabled"),Toast.LENGTH_LONG).show();return@dialog}
             settings.put("proxy_dhcp_enabled",!automatic && values[proxyLabel].toBoolean())
-            settings.put("dhcp_enabled",!automatic && values["分配地址"].toBoolean()).put("ethernet_enabled",values["以太网协议"].toBoolean())
+            settings.put("dhcp_enabled",!automatic && values["Allocate addresses"].toBoolean()).put("ethernet_enabled",values["Ethernet protocols"].toBoolean())
             request("/api/settings","PUT",settings){detectNetwork()}
         }
     }
