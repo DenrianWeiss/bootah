@@ -9,9 +9,9 @@ val internalVersion = (androidVersion["build"] as Number).toInt()
 require(displayVersion.matches(Regex("(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)"))) { "Invalid Android display version" }
 require(internalVersion in 1..65534 && displayVersion.split('.').all { it.toIntOrNull()?.let { n -> n <= 65534 } == true }) { "Invalid Android version component or build" }
 android {
-    namespace = "work.premutation.bootah"
+    namespace = "work.permutation.bootah"
     compileSdk = 35
-    defaultConfig { applicationId = "work.premutation.bootah"; minSdk = 26; targetSdk = 35; versionCode = internalVersion; versionName = displayVersion }
+    defaultConfig { applicationId = "work.permutation.bootah"; minSdk = 26; targetSdk = 35; versionCode = internalVersion; versionName = displayVersion }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { buildConfig = true }

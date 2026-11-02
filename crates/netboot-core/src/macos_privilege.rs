@@ -267,7 +267,7 @@ fn timeout(stream: &UnixStream) -> Result<(), String> {
         .and_then(|_| stream.set_write_timeout(Some(Duration::from_secs(10))))
         .map_err(|e| e.to_string())
 }
-const SOCKET_PATH: &str = "/var/run/work.premutation.bootah.network.sock";
+const SOCKET_PATH: &str = "/var/run/work.permutation.bootah.network.sock";
 pub fn authorization_available() -> bool {
     let Ok(stream) = UnixStream::connect(SOCKET_PATH) else {
         return false;

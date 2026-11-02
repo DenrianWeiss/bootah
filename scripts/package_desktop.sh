@@ -35,7 +35,7 @@ case "$1" in
   mkdir -p ".artifacts/desktop-$1/scripts" ".artifacts/desktop-$1/packaging/linux"
   cp scripts/install_linux_core.sh ".artifacts/desktop-$1/scripts/"
   cp packaging/linux/dev.netboot.network.policy ".artifacts/desktop-$1/packaging/linux/"
-  cat > ".artifacts/desktop-$1/work.premutation.bootah.desktop" <<'ENTRY'
+  cat > ".artifacts/desktop-$1/work.permutation.bootah.desktop" <<'ENTRY'
 [Desktop Entry]
 Type=Application
 Name=Bootah

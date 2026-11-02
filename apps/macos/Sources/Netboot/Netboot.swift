@@ -237,13 +237,13 @@ struct NetworkPermissions:Codable {var helperAvailable:Bool;var reason:String;va
         let args=ProcessInfo.processInfo.arguments
         if let index=args.firstIndex(of:"--api-token"),index+1<args.count{return args[index+1]}
         if let token=ProcessInfo.processInfo.environment["BOOTAH_API_TOKEN"] {return token}
-        let query:[String:Any]=[kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:"work.premutation.bootah.api",kSecAttrAccount as String:endpoint.absoluteString,kSecReturnData as String:true]
+        let query:[String:Any]=[kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:"work.permutation.bootah.api",kSecAttrAccount as String:endpoint.absoluteString,kSecReturnData as String:true]
         var result:CFTypeRef?
         if SecItemCopyMatching(query as CFDictionary,&result)==errSecSuccess,let data=result as? Data,let token=String(data:data,encoding:.utf8){return token}
         return askToken()
     }
     func askToken() -> String {
-        let query:[String:Any]=[kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:"work.premutation.bootah.api",kSecAttrAccount as String:endpoint.absoluteString]
+        let query:[String:Any]=[kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:"work.permutation.bootah.api",kSecAttrAccount as String:endpoint.absoluteString]
         let alert=NSAlert();alert.messageText=L10n.tr("Management token");alert.addButton(withTitle:L10n.tr("OK"));alert.addButton(withTitle:L10n.tr("Cancel"));let field=NSSecureTextField(frame:NSRect(x:0,y:0,width:320,height:24));alert.accessoryView=field
         guard alert.runModal() == .alertFirstButtonReturn else{return ""}
         let token=field.stringValue
@@ -307,7 +307,7 @@ struct NetworkPermissions:Codable {var helperAvailable:Bool;var reason:String;va
         if process.terminationStatus != 0 {throw NSError(domain:"Bootah",code:Int(process.terminationStatus),userInfo:[NSLocalizedDescriptionKey:String(data:errors.fileHandleForReading.readDataToEndOfFile(),encoding:.utf8) ?? "Export failed"])}
         return data
     }
-    var networkHelper:SMAppService {SMAppService.daemon(plistName:"work.premutation.bootah.network.plist")}
+    var networkHelper:SMAppService {SMAppService.daemon(plistName:"work.permutation.bootah.network.plist")}
     func authorizeNetworkHelper() async {
         await refreshNetworkPermissions()
         guard helperAvailable else{return}

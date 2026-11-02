@@ -15,7 +15,7 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>Bootah</string>
-<key>CFBundleIdentifier</key><string>work.premutation.bootah</string>
+<key>CFBundleIdentifier</key><string>work.permutation.bootah</string>
 <key>CFBundleName</key><string>Bootah</string>
 <key>CFBundleIconFile</key><string>bootah.icns</string>
 <key>CFBundleVersion</key><string>1</string>
@@ -30,13 +30,13 @@ mkdir -p "$app/Contents/Resources/system-icons"
 cp -R resources/system-icons/light resources/system-icons/dark "$app/Contents/Resources/system-icons/"
 cp -R LICENSES "$app/Contents/Resources/"
 mkdir -p "$app/Contents/Library/LaunchDaemons"
-cp packaging/macos/work.premutation.bootah.network.plist "$app/Contents/Library/LaunchDaemons/"
+cp packaging/macos/work.permutation.bootah.network.plist "$app/Contents/Library/LaunchDaemons/"
 identity="${BOOTAH_SIGN_IDENTITY:--}"
 if [ "$identity" = - ]; then
     codesign --force --deep --options runtime --sign - "$app"
 else
-    codesign --force --identifier work.premutation.bootah.network-core --options runtime --timestamp --sign "$identity" "$app/Contents/MacOS/netboot-core"
-    codesign --force --identifier work.premutation.bootah.network-core --options runtime --timestamp --sign "$identity" "$app/Contents/MacOS/netboot-tui"
+    codesign --force --identifier work.permutation.bootah.network-core --options runtime --timestamp --sign "$identity" "$app/Contents/MacOS/netboot-core"
+    codesign --force --identifier work.permutation.bootah.network-core --options runtime --timestamp --sign "$identity" "$app/Contents/MacOS/netboot-tui"
     codesign --force --deep --preserve-metadata=identifier --options runtime --timestamp --sign "$identity" "$app"
 fi
 codesign --verify --deep --strict "$app"

@@ -1,4 +1,4 @@
-package work.premutation.bootah
+package work.permutation.bootah
 
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
